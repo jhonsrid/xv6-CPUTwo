@@ -55,6 +55,7 @@
 #define REG_ESTATUS 0x03FFF014u  // STATUS snapshot saved on trap entry
 #define REG_SATP    0x03FFF018u  // MMU control: bit31=EN, bits[19:0]=PPN
 #define REG_BADADDR 0x03FFF01Cu  // faulting VA on page fault (read-only)
+#define REG_WFI     0x03FFF020u  // write to idle until event (emulator sleeps)
 
 // STATUS / ESTATUS bits
 #define STATUS_SUPERVISOR  0x01u  // bit 0: current privilege (1=supervisor)

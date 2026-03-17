@@ -234,5 +234,10 @@ polldev(void)
     }
     // Clear the IC pending bit (if any) now that we've drained.
     mmio_w(IC_ACK, IC_BIT_UART_RX);
+    return;
   }
+
+  // Nothing pending — tell the emulator to sleep until an event arrives.
+  // This prevents the host from burning 100% CPU on the idle loop.
+  mmio_w(REG_WFI, 0);
 }
