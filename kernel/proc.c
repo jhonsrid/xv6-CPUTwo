@@ -460,10 +460,11 @@ scheduler(void)
       release(&p->lock);
     }
     if(found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
-      // CPUTwo has no WFI; interrupts only fire in user mode anyway,
-      // so just yield the spin loop momentarily.
-      asm volatile("" ::: "memory");
+      // Nothing to run.  CPUTwo cannot take real interrupts in
+      // supervisor mode (double-fault), so poll for pending device
+      // events here.  This lets UART RX / block-device completions
+      // wake sleeping processes.
+      polldev();
     }
   }
 }

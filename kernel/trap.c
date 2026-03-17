@@ -15,6 +15,7 @@ extern char trampoline_start[], uservec[], userret[];
 void kernelvec(void);
 
 extern int devintr(void);
+void clockintr(void);
 
 void
 trapinit(void)
@@ -88,9 +89,15 @@ usertrap(void)
   if(killed(p))
     kexit(-1);
 
-  // Give up the CPU if this is a timer interrupt.
+  // Give up the CPU if this is a timer interrupt or the timer has
+  // elapsed since the last check (timer is polled, not interrupt-driven,
+  // because CPUTwo hardware clobbers lr on trap entry).
   if(which_dev == 2)
     yield();
+  if(cause == CAUSE_SYSCALL && (mmio_r(IC_PENDING) & IC_BIT_TIMER)) {
+    clockintr();
+    yield();
+  }
 
   prepare_return();
 
@@ -199,4 +206,31 @@ devintr(void)
   }
 
   return 0;
+}
+
+//
+// Poll for and handle pending device interrupts from supervisor mode.
+// Called from the scheduler's idle loop because CPUTwo cannot take
+// real interrupts in supervisor mode (double-fault halts the CPU).
+//
+void
+polldev(void)
+{
+  uint32 pending = mmio_r(IC_PENDING);
+
+  if(pending & IC_BIT_TIMER) {
+    clockintr();
+  }
+  if(pending & IC_BIT_UART_RX) {
+    uartintr();
+    mmio_w(IC_ACK, IC_BIT_UART_RX);
+  }
+  if(pending & IC_BIT_UART_TX) {
+    uartintr();
+    mmio_w(IC_ACK, IC_BIT_UART_TX);
+  }
+  if(pending & IC_BIT_BLKDEV) {
+    virtio_disk_intr();
+    mmio_w(IC_ACK, IC_BIT_BLKDEV);
+  }
 }

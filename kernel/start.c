@@ -51,11 +51,14 @@ start(void)
 void
 timerinit(void)
 {
-  // Set the timer period to 100000 ticks (~tenth of a second at typical rates)
-  // and enable the timer with interrupts.
+  // Start the timer (enable + device interrupt) but do NOT unmask it in
+  // the IC.  CPUTwo hardware irrecoverably clobbers lr (r14) on every
+  // trap entry, so asynchronous timer interrupts in user mode would
+  // destroy leaf-function return addresses.  Instead, the timer pending
+  // bit is polled from polldev() (scheduler idle) and checked in
+  // usertrap() on every syscall to give preemption at syscall boundaries.
   mmio_w(TIMER_PERIOD, 100000);
   mmio_w(TIMER_CTRL, 0x3);  // bit0=enable, bit1=irq enable
 
-  // Enable the timer source in the interrupt controller.
-  mmio_w(IC_ENABLE, mmio_r(IC_ENABLE) | IC_BIT_TIMER);
+  // Do NOT enable IC_BIT_TIMER in the IC mask — timer is polled only.
 }

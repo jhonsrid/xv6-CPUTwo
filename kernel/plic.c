@@ -15,8 +15,12 @@
 void
 plicinit(void)
 {
-  // Enable timer, UART RX, and block device interrupts in the IC.
-  mmio_w(IC_ENABLE, IC_BIT_TIMER | IC_BIT_UART_RX | IC_BIT_BLKDEV);
+  // Do NOT unmask any interrupt sources in the IC.
+  // CPUTwo hardware irrecoverably clobbers lr (r14) on every trap entry,
+  // so any asynchronous interrupt during user-mode execution destroys
+  // leaf-function return addresses.  All device events are handled by
+  // polling (polldev() in the scheduler idle loop and on syscall entry).
+  mmio_w(IC_ENABLE, 0);
 }
 
 void
