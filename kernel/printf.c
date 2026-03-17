@@ -11,7 +11,7 @@
 #include "fs.h"
 #include "file.h"
 #include "memlayout.h"
-#include "riscv.h"
+#include "cputwo.h"
 #include "defs.h"
 #include "proc.h"
 
@@ -19,21 +19,22 @@ volatile int panicking = 0; // printing a panic message
 volatile int panicked = 0; // spinning forever at end of a panic
 
 // lock to avoid interleaving concurrent printf's.
-static struct {
+struct pr_t {
   struct spinlock lock;
-} pr;
+};
+static struct pr_t pr;
 
 static char digits[] = "0123456789abcdef";
 
 static void
-printint(long long xx, int base, int sign)
+printint(uint32 xx, int base, int sign)
 {
   char buf[20];
   int i;
-  unsigned long long x;
+  uint32 x;
 
-  if(sign && (sign = (xx < 0)))
-    x = -xx;
+  if(sign && (sign = ((int)xx < 0)))
+    x = -(int)xx;
   else
     x = xx;
 
@@ -50,13 +51,13 @@ printint(long long xx, int base, int sign)
 }
 
 static void
-printptr(uint64 x)
+printptr(uint32 x)
 {
   int i;
   consputc('0');
   consputc('x');
-  for (i = 0; i < (sizeof(uint64) * 2); i++, x <<= 4)
-    consputc(digits[x >> (sizeof(uint64) * 8 - 4)]);
+  for (i = 0; i < (sizeof(uint32) * 2); i++, x <<= 4)
+    consputc(digits[x >> (sizeof(uint32) * 8 - 4)]);
 }
 
 // Print to the console.
@@ -84,29 +85,29 @@ printf(char *fmt, ...)
     if(c0 == 'd'){
       printint(va_arg(ap, int), 10, 1);
     } else if(c0 == 'l' && c1 == 'd'){
-      printint(va_arg(ap, uint64), 10, 1);
+      printint(va_arg(ap, uint32), 10, 1);
       i += 1;
     } else if(c0 == 'l' && c1 == 'l' && c2 == 'd'){
-      printint(va_arg(ap, uint64), 10, 1);
+      printint(va_arg(ap, uint32), 10, 1);
       i += 2;
     } else if(c0 == 'u'){
       printint(va_arg(ap, uint32), 10, 0);
     } else if(c0 == 'l' && c1 == 'u'){
-      printint(va_arg(ap, uint64), 10, 0);
+      printint(va_arg(ap, uint32), 10, 0);
       i += 1;
     } else if(c0 == 'l' && c1 == 'l' && c2 == 'u'){
-      printint(va_arg(ap, uint64), 10, 0);
+      printint(va_arg(ap, uint32), 10, 0);
       i += 2;
     } else if(c0 == 'x'){
       printint(va_arg(ap, uint32), 16, 0);
     } else if(c0 == 'l' && c1 == 'x'){
-      printint(va_arg(ap, uint64), 16, 0);
+      printint(va_arg(ap, uint32), 16, 0);
       i += 1;
     } else if(c0 == 'l' && c1 == 'l' && c2 == 'x'){
-      printint(va_arg(ap, uint64), 16, 0);
+      printint(va_arg(ap, uint32), 16, 0);
       i += 2;
     } else if(c0 == 'p'){
-      printptr(va_arg(ap, uint64));
+      printptr(va_arg(ap, uint32));
     } else if(c0 == 'c'){
       consputc(va_arg(ap, uint));
     } else if(c0 == 's'){

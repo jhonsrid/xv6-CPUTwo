@@ -1,107 +1,62 @@
+// CPUTwo UART driver.
+// Custom UART at 0x03F00000.
 //
-// low-level driver for 16550a UART.
-//
+// Registers (all word-wide):
+//   +0x00  Status:  bit0 = TX ready, bit1 = RX available
+//   +0x04  TX:      write byte to transmit (low 8 bits)
+//   +0x08  RX:      read received byte (0 if none)
+//   +0x0C  Control: bit0 = RX irq enable, bit1 = TX irq enable
 
 #include "types.h"
 #include "param.h"
 #include "memlayout.h"
-#include "riscv.h"
+#include "cputwo.h"
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
 
-// the UART control registers are memory-mapped
-// at address UART0. this macro returns the
-// address of one of the registers.
-#define Reg(reg) ((volatile unsigned char *)(UART0 + (reg)))
-
-#define ReadReg(reg) (*(Reg(reg)))
-#define WriteReg(reg, v) (*(Reg(reg)) = (v))
-
-// the UART control registers.
-// some have different meanings for read vs write.
-// see http://byterunner.com/16550.html
-#define RHR 0                 // receive holding register (for input bytes)
-#define THR 0                 // transmit holding register (for output bytes)
-#define IER 1                 // interrupt enable register
-#define IER_RX_ENABLE (1<<0)
-#define IER_TX_ENABLE (1<<1)
-#define FCR 2                 // FIFO control register
-#define FCR_FIFO_ENABLE (1<<0)
-#define FCR_FIFO_CLEAR (3<<1) // clear the content of the two FIFOs
-#define ISR 2                 // interrupt status register
-#define LCR 3                 // line control register
-#define LCR_EIGHT_BITS (3<<0)
-#define LCR_BAUD_LATCH (1<<7) // special mode to set baud rate
-#define LSR 5                 // line status register
-#define LSR_RX_READY (1<<0)   // input is waiting to be read from RHR
-#define LSR_TX_IDLE (1<<5)    // THR can accept another character to send
-
-// for sending threads to synchronize with uart "ready" interrupts.
+// for sending threads to synchronize with UART "ready" interrupts.
 static struct spinlock tx_lock;
-static int tx_busy;           // is the UART busy sending?
-static int tx_chan;           // &tx_chan is the "wait channel"
+static int tx_busy;    // is the UART busy sending?
+static int tx_chan;    // &tx_chan is the wait channel
 
 extern volatile int panicking; // from printf.c
-extern volatile int panicked; // from printf.c
+extern volatile int panicked;  // from printf.c
 
 void
 uartinit(void)
 {
-  // disable interrupts.
-  WriteReg(IER, 0x00);
-
-  // special mode to set baud rate.
-  WriteReg(LCR, LCR_BAUD_LATCH);
-
-  // LSB for baud rate of 38.4K.
-  WriteReg(0, 0x03);
-
-  // MSB for baud rate of 38.4K.
-  WriteReg(1, 0x00);
-
-  // leave set-baud mode,
-  // and set word length to 8 bits, no parity.
-  WriteReg(LCR, LCR_EIGHT_BITS);
-
-  // reset and enable FIFOs.
-  WriteReg(FCR, FCR_FIFO_ENABLE | FCR_FIFO_CLEAR);
-
-  // enable transmit and receive interrupts.
-  WriteReg(IER, IER_TX_ENABLE | IER_RX_ENABLE);
+  // Enable RX interrupt; leave TX interrupt disabled until uartwrite() arms it.
+  mmio_w(UART_CTRL, UART_CTRL_RX_IRQ);
 
   initlock(&tx_lock, "uart");
 }
 
-// transmit buf[] to the uart. it blocks if the
-// uart is busy, so it cannot be called from
-// interrupts, only from write() system calls.
+// Transmit buf[0..n-1] over the UART.
+// Blocks if the UART is busy (waits for TX interrupt).
+// Cannot be called from interrupt context.
 void
 uartwrite(char buf[], int n)
 {
   acquire(&tx_lock);
 
-  int i = 0;
-  while(i < n){ 
+  for(int i = 0; i < n; i++){
     while(tx_busy != 0){
-      // wait for a UART transmit-complete interrupt
-      // to set tx_busy to 0.
+      // Wait for a TX-complete interrupt to clear tx_busy.
       sleep(&tx_chan, &tx_lock);
-    }   
-      
-    WriteReg(THR, buf[i]);
-    i += 1;
+    }
+    mmio_w(UART_TX, (uint32)(unsigned char)buf[i]);
     tx_busy = 1;
+    // Enable TX interrupt so we're notified when the byte is sent.
+    mmio_w(UART_CTRL, UART_CTRL_RX_IRQ | UART_CTRL_TX_IRQ);
   }
 
   release(&tx_lock);
 }
 
-
-// write a byte to the uart without using
-// interrupts, for use by kernel printf() and
-// to echo characters. it spins waiting for the uart's
-// output register to be empty.
+// Write a byte to the UART without using interrupts.
+// Spins until the TX register is ready.  Used by kernel printf() and
+// early-boot output before the scheduler is running.
 void
 uartputc_sync(int c)
 {
@@ -113,45 +68,42 @@ uartputc_sync(int c)
       ;
   }
 
-  // wait for UART to set Transmit Holding Empty in LSR.
-  while((ReadReg(LSR) & LSR_TX_IDLE) == 0)
+  // Spin until TX is ready.
+  while((mmio_r(UART_STATUS) & UART_STATUS_TX_READY) == 0)
     ;
-  WriteReg(THR, c);
+  mmio_w(UART_TX, (uint32)(unsigned char)c);
 
   if(panicking == 0)
     pop_off();
 }
 
-// try to read one input character from the UART.
-// return -1 if none is waiting.
+// Try to read one input character.
+// Returns -1 if no character is waiting.
 int
 uartgetc(void)
 {
-  if(ReadReg(LSR) & LSR_RX_READY){
-    // input data is ready.
-    return ReadReg(RHR);
-  } else {
-    return -1;
+  if(mmio_r(UART_STATUS) & UART_STATUS_RX_AVAIL){
+    return (int)(mmio_r(UART_RX) & 0xFF);
   }
+  return -1;
 }
 
-// handle a uart interrupt, raised because input has
-// arrived, or the uart is ready for more output, or
-// both. called from devintr().
+// Handle a UART interrupt.
+// Called from devintr() for both RX and TX events.
 void
 uartintr(void)
 {
-  ReadReg(ISR); // acknowledge the interrupt
-
+  // Handle TX complete: wake up any thread waiting to send.
   acquire(&tx_lock);
-  if(ReadReg(LSR) & LSR_TX_IDLE){
-    // UART finished transmitting; wake up sending thread.
+  if((mmio_r(UART_STATUS) & UART_STATUS_TX_READY) && tx_busy){
     tx_busy = 0;
+    // Disable TX interrupt until next byte is queued.
+    mmio_w(UART_CTRL, UART_CTRL_RX_IRQ);
     wakeup(&tx_chan);
   }
   release(&tx_lock);
 
-  // read and process incoming characters, if any.
+  // Drain any received characters.
   while(1){
     int c = uartgetc();
     if(c == -1)

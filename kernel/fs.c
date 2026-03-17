@@ -10,7 +10,7 @@
 // are in sysfile.c.
 
 #include "types.h"
-#include "riscv.h"
+#include "cputwo.h"
 #include "defs.h"
 #include "param.h"
 #include "stat.h"
@@ -24,7 +24,11 @@
 #define min(a, b) ((a) < (b) ? (a) : (b))
 // there should be one superblock per disk device, but we run with
 // only one device
-struct superblock sb; 
+struct superblock sb;
+// CPUTwo TCC bug: global struct field accesses use addend=0 relocation,
+// reading the wrong offset.  Use pointer-based access (sbp->field) instead
+// of direct global access (sb.field) throughout this file.
+struct superblock *sbp = &sb;
 
 // Read the super block.
 static void
@@ -41,9 +45,12 @@ readsb(int dev, struct superblock *sb)
 void
 fsinit(int dev) {
   readsb(dev, &sb);
-  if(sb.magic != FSMAGIC)
+  if(sbp->magic != FSMAGIC)
     panic("invalid file system");
+  printf("fsinit: sbp->magic=0x%x size=%d nblocks=%d ninodes=%d nlog=%d logstart=%d inodestart=%d bmapstart=%d\n",
+         sbp->magic, sbp->size, sbp->nblocks, sbp->ninodes, sbp->nlog, sbp->logstart, sbp->inodestart, sbp->bmapstart);
   initlog(dev, &sb);
+  printf("fsinit: after initlog, sbp->inodestart=%d IPB=%d\n", sbp->inodestart, BSIZE/(int)sizeof(struct dinode));
   ireclaim(dev);
 }
 
@@ -70,9 +77,9 @@ balloc(uint dev)
   struct buf *bp;
 
   bp = 0;
-  for(b = 0; b < sb.size; b += BPB){
+  for(b = 0; b < sbp->size; b += BPB){
     bp = bread(dev, BBLOCK(b, sb));
-    for(bi = 0; bi < BPB && b + bi < sb.size; bi++){
+    for(bi = 0; bi < BPB && b + bi < sbp->size; bi++){
       m = 1 << (bi % 8);
       if((bp->data[bi/8] & m) == 0){  // Is block free?
         bp->data[bi/8] |= m;  // Mark block in use.
@@ -113,7 +120,7 @@ bfree(int dev, uint b)
 // list of blocks holding the file's content.
 //
 // The inodes are laid out sequentially on disk at block
-// sb.inodestart. Each inode has a number, indicating its
+// sbp->inodestart. Each inode has a number, indicating its
 // position on the disk.
 //
 // The kernel keeps a table of in-use inodes in memory
@@ -165,28 +172,26 @@ bfree(int dev, uint b)
 // have locked the inodes involved; this lets callers create
 // multi-step atomic operations.
 //
-// The itable.lock spin-lock protects the allocation of itable
+// The itable_lock spin-lock protects the allocation of itable
 // entries. Since ip->ref indicates whether an entry is free,
 // and ip->dev and ip->inum indicate which i-node an entry
-// holds, one must hold itable.lock while using any of those fields.
+// holds, one must hold itable_lock while using any of those fields.
 //
 // An ip->lock sleep-lock protects all ip-> fields other than ref,
 // dev, and inum.  One must hold ip->lock in order to
 // read or write that inode's ip->valid, ip->size, ip->type, &c.
 
-struct {
-  struct spinlock lock;
-  struct inode inode[NINODE];
-} itable;
+struct spinlock itable_lock;
+struct inode itable_inode[NINODE];
 
 void
 iinit()
 {
   int i = 0;
   
-  initlock(&itable.lock, "itable");
+  initlock(&itable_lock, "itable");
   for(i = 0; i < NINODE; i++) {
-    initsleeplock(&itable.inode[i].lock, "inode");
+    initsleeplock(&itable_inode[i].lock, "inode");
   }
 }
 
@@ -203,8 +208,8 @@ ialloc(uint dev, short type)
   struct buf *bp;
   struct dinode *dip;
 
-  for(inum = 1; inum < sb.ninodes; inum++){
-    bp = bread(dev, IBLOCK(inum, sb));
+  for(inum = 1; inum < sbp->ninodes; inum++){
+    bp = bread(dev, IBLOCK(inum, (*sbp)));
     dip = (struct dinode*)bp->data + inum%IPB;
     if(dip->type == 0){  // a free inode
       memset(dip, 0, sizeof(*dip));
@@ -229,7 +234,7 @@ iupdate(struct inode *ip)
   struct buf *bp;
   struct dinode *dip;
 
-  bp = bread(ip->dev, IBLOCK(ip->inum, sb));
+  bp = bread(ip->dev, IBLOCK(ip->inum, (*sbp)));
   dip = (struct dinode*)bp->data + ip->inum%IPB;
   dip->type = ip->type;
   dip->major = ip->major;
@@ -248,15 +253,16 @@ static struct inode*
 iget(uint dev, uint inum)
 {
   struct inode *ip, *empty;
+  int _n = NINODE;
 
-  acquire(&itable.lock);
+  acquire(&itable_lock);
 
   // Is the inode already in the table?
   empty = 0;
-  for(ip = &itable.inode[0]; ip < &itable.inode[NINODE]; ip++){
+  for(ip = itable_inode; ip < itable_inode + _n; ip++){
     if(ip->ref > 0 && ip->dev == dev && ip->inum == inum){
       ip->ref++;
-      release(&itable.lock);
+      release(&itable_lock);
       return ip;
     }
     if(empty == 0 && ip->ref == 0)    // Remember empty slot.
@@ -272,7 +278,7 @@ iget(uint dev, uint inum)
   ip->inum = inum;
   ip->ref = 1;
   ip->valid = 0;
-  release(&itable.lock);
+  release(&itable_lock);
 
   return ip;
 }
@@ -282,9 +288,9 @@ iget(uint dev, uint inum)
 struct inode*
 idup(struct inode *ip)
 {
-  acquire(&itable.lock);
+  acquire(&itable_lock);
   ip->ref++;
-  release(&itable.lock);
+  release(&itable_lock);
   return ip;
 }
 
@@ -302,7 +308,7 @@ ilock(struct inode *ip)
   acquiresleep(&ip->lock);
 
   if(ip->valid == 0){
-    bp = bread(ip->dev, IBLOCK(ip->inum, sb));
+    bp = bread(ip->dev, IBLOCK(ip->inum, (*sbp)));
     dip = (struct dinode*)bp->data + ip->inum%IPB;
     ip->type = dip->type;
     ip->major = dip->major;
@@ -337,7 +343,7 @@ iunlock(struct inode *ip)
 void
 iput(struct inode *ip)
 {
-  acquire(&itable.lock);
+  acquire(&itable_lock);
 
   if(ip->ref == 1 && ip->valid && ip->nlink == 0){
     // inode has no links and no other references: truncate and free.
@@ -346,7 +352,7 @@ iput(struct inode *ip)
     // so this acquiresleep() won't block (or deadlock).
     acquiresleep(&ip->lock);
 
-    release(&itable.lock);
+    release(&itable_lock);
 
     itrunc(ip);
     ip->type = 0;
@@ -355,11 +361,11 @@ iput(struct inode *ip)
 
     releasesleep(&ip->lock);
 
-    acquire(&itable.lock);
+    acquire(&itable_lock);
   }
 
   ip->ref--;
-  release(&itable.lock);
+  release(&itable_lock);
 }
 
 // Common idiom: unlock, then put.
@@ -373,9 +379,9 @@ iunlockput(struct inode *ip)
 void
 ireclaim(int dev)
 {
-  for (int inum = 1; inum < sb.ninodes; inum++) {
+  for (int inum = 1; inum < sbp->ninodes; inum++) {
     struct inode *ip = 0;
-    struct buf *bp = bread(dev, IBLOCK(inum, sb));
+    struct buf *bp = bread(dev, IBLOCK(inum, (*sbp)));
     struct dinode *dip = (struct dinode *)bp->data + inum % IPB;
     if (dip->type != 0 && dip->nlink == 0) {  // is an orphaned inode
       printf("ireclaim: orphaned inode %d\n", inum);
@@ -492,7 +498,7 @@ stati(struct inode *ip, struct stat *st)
 // If user_dst==1, then dst is a user virtual address;
 // otherwise, dst is a kernel address.
 int
-readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
+readi(struct inode *ip, int user_dst, uint32 dst, uint off, uint n)
 {
   uint tot, m;
   struct buf *bp;
@@ -526,7 +532,7 @@ readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
 // If the return value is less than the requested n,
 // there was an error of some kind.
 int
-writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
+writei(struct inode *ip, int user_src, uint32 src, uint off, uint n)
 {
   uint tot, m;
   struct buf *bp;
@@ -581,7 +587,7 @@ dirlookup(struct inode *dp, char *name, uint *poff)
     panic("dirlookup not DIR");
 
   for(off = 0; off < dp->size; off += sizeof(de)){
-    if(readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+    if(readi(dp, 0, (uint32)&de, off, sizeof(de)) != sizeof(de))
       panic("dirlookup read");
     if(de.inum == 0)
       continue;
@@ -614,7 +620,7 @@ dirlink(struct inode *dp, char *name, uint inum)
 
   // Look for an empty dirent.
   for(off = 0; off < dp->size; off += sizeof(de)){
-    if(readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+    if(readi(dp, 0, (uint32)&de, off, sizeof(de)) != sizeof(de))
       panic("dirlink read");
     if(de.inum == 0)
       break;
@@ -622,7 +628,7 @@ dirlink(struct inode *dp, char *name, uint inum)
 
   strncpy(de.name, name, DIRSIZ);
   de.inum = inum;
-  if(writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+  if(writei(dp, 0, (uint32)&de, off, sizeof(de)) != sizeof(de))
     return -1;
 
   return 0;

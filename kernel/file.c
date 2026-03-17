@@ -3,7 +3,7 @@
 //
 
 #include "types.h"
-#include "riscv.h"
+#include "cputwo.h"
 #include "defs.h"
 #include "param.h"
 #include "fs.h"
@@ -14,15 +14,13 @@
 #include "proc.h"
 
 struct devsw devsw[NDEV];
-struct {
-  struct spinlock lock;
-  struct file file[NFILE];
-} ftable;
+struct spinlock ftable_lock;
+struct file ftable_file[NFILE];
 
 void
 fileinit(void)
 {
-  initlock(&ftable.lock, "ftable");
+  initlock(&ftable_lock, "ftable");
 }
 
 // Allocate a file structure.
@@ -30,16 +28,17 @@ struct file*
 filealloc(void)
 {
   struct file *f;
+  int _n = NFILE;
 
-  acquire(&ftable.lock);
-  for(f = ftable.file; f < ftable.file + NFILE; f++){
+  acquire(&ftable_lock);
+  for(f = ftable_file; f < ftable_file + _n; f++){
     if(f->ref == 0){
       f->ref = 1;
-      release(&ftable.lock);
+      release(&ftable_lock);
       return f;
     }
   }
-  release(&ftable.lock);
+  release(&ftable_lock);
   return 0;
 }
 
@@ -47,11 +46,11 @@ filealloc(void)
 struct file*
 filedup(struct file *f)
 {
-  acquire(&ftable.lock);
+  acquire(&ftable_lock);
   if(f->ref < 1)
     panic("filedup");
   f->ref++;
-  release(&ftable.lock);
+  release(&ftable_lock);
   return f;
 }
 
@@ -61,17 +60,17 @@ fileclose(struct file *f)
 {
   struct file ff;
 
-  acquire(&ftable.lock);
+  acquire(&ftable_lock);
   if(f->ref < 1)
     panic("fileclose");
   if(--f->ref > 0){
-    release(&ftable.lock);
+    release(&ftable_lock);
     return;
   }
   ff = *f;
   f->ref = 0;
   f->type = FD_NONE;
-  release(&ftable.lock);
+  release(&ftable_lock);
 
   if(ff.type == FD_PIPE){
     pipeclose(ff.pipe, ff.writable);
@@ -85,7 +84,7 @@ fileclose(struct file *f)
 // Get metadata about file f.
 // addr is a user virtual address, pointing to a struct stat.
 int
-filestat(struct file *f, uint64 addr)
+filestat(struct file *f, uint32 addr)
 {
   struct proc *p = myproc();
   struct stat st;
@@ -104,7 +103,7 @@ filestat(struct file *f, uint64 addr)
 // Read from file f.
 // addr is a user virtual address.
 int
-fileread(struct file *f, uint64 addr, int n)
+fileread(struct file *f, uint32 addr, int n)
 {
   int r = 0;
 
@@ -132,7 +131,7 @@ fileread(struct file *f, uint64 addr, int n)
 // Write to file f.
 // addr is a user virtual address.
 int
-filewrite(struct file *f, uint64 addr, int n)
+filewrite(struct file *f, uint32 addr, int n)
 {
   int r, ret = 0;
 

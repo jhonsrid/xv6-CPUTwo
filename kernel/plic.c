@@ -1,47 +1,42 @@
+// CPUTwo interrupt controller (IC) driver.
+// Replaces the RISC-V PLIC for the CPUTwo port.
+//
+// The IC sits at 0x03F02000:
+//   +0x00  Pending  (read-only)  — bits set when device fires
+//   +0x04  Enable               — write 1 to unmask a source
+//   +0x08  Acknowledge          — write bit(s) to clear pending
+
 #include "types.h"
 #include "param.h"
 #include "memlayout.h"
-#include "riscv.h"
+#include "cputwo.h"
 #include "defs.h"
-
-//
-// the riscv Platform Level Interrupt Controller (PLIC).
-//
 
 void
 plicinit(void)
 {
-  // set desired IRQ priorities non-zero (otherwise disabled).
-  *(uint32*)(PLIC + UART0_IRQ*4) = 1;
-  *(uint32*)(PLIC + VIRTIO0_IRQ*4) = 1;
+  // Enable timer, UART RX, and block device interrupts in the IC.
+  mmio_w(IC_ENABLE, IC_BIT_TIMER | IC_BIT_UART_RX | IC_BIT_BLKDEV);
 }
 
 void
 plicinithart(void)
 {
-  int hart = cpuid();
-  
-  // set enable bits for this hart's S-mode
-  // for the uart and virtio disk.
-  *(uint32*)PLIC_SENABLE(hart) = (1 << UART0_IRQ) | (1 << VIRTIO0_IRQ);
-
-  // set this hart's S-mode priority threshold to 0.
-  *(uint32*)PLIC_SPRIORITY(hart) = 0;
+  // Nothing per-hart on CPUTwo's simple IC.
+  // (On RISC-V this configured the per-hart PLIC threshold and enable regs.)
 }
 
-// ask the PLIC what interrupt we should serve.
+// Returns the bitmask of the highest-priority pending+enabled interrupt,
+// or 0 if none.  (Kept for API compatibility with callers.)
 int
 plic_claim(void)
 {
-  int hart = cpuid();
-  int irq = *(uint32*)PLIC_SCLAIM(hart);
-  return irq;
+  return (int)mmio_r(IC_PENDING);
 }
 
-// tell the PLIC we've served this IRQ.
+// Acknowledge an interrupt by clearing the corresponding bit.
 void
-plic_complete(int irq)
+plic_complete(int irq_mask)
 {
-  int hart = cpuid();
-  *(uint32*)PLIC_SCLAIM(hart) = irq;
+  mmio_w(IC_ACK, (uint32)irq_mask);
 }

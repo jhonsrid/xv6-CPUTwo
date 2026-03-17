@@ -1,16 +1,25 @@
-OUTPUT_ARCH( "riscv" )
+OUTPUT_ARCH( "cputwo" )
 ENTRY( _entry )
 
 SECTIONS
 {
   /*
-   * ensure that entry.S / _entry is at 0x80000000,
-   * where qemu's -kernel jumps.
+   * Place the reset vector at address 0 — a single JMP to _entry at 0x1000.
    */
-  . = 0x80000000;
+  . = 0x00000000;
+  .text.reset : {
+    *(.text.reset)
+  }
+
+  /*
+   * Kernel text starts at 0x00001000.
+   * The first page (0x0000–0x0FFF) contains only the reset vector;
+   * pages 1+ are the real kernel, keeping page 0 as a null-pointer trap.
+   */
+  . = 0x00001000;
 
   .text : {
-    kernel/entry.o(_entry)
+    kernel/entry.o(.text)
     *(.text .text.*)
     . = ALIGN(0x1000);
     _trampoline = .;
@@ -22,21 +31,21 @@ SECTIONS
 
   .rodata : {
     . = ALIGN(16);
-    *(.srodata .srodata.*) /* do not need to distinguish this from .rodata */
+    *(.srodata .srodata.*)
     . = ALIGN(16);
     *(.rodata .rodata.*)
   }
 
   .data : {
     . = ALIGN(16);
-    *(.sdata .sdata.*) /* do not need to distinguish this from .data */
+    *(.sdata .sdata.*)
     . = ALIGN(16);
     *(.data .data.*)
   }
 
   .bss : {
     . = ALIGN(16);
-    *(.sbss .sbss.*) /* do not need to distinguish this from .bss */
+    *(.sbss .sbss.*)
     . = ALIGN(16);
     *(.bss .bss.*)
   }

@@ -1,7 +1,7 @@
 #include "types.h"
 #include "param.h"
 #include "memlayout.h"
-#include "riscv.h"
+#include "cputwo.h"
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
@@ -9,12 +9,12 @@
 struct spinlock tickslock;
 uint ticks;
 
-extern char trampoline[], uservec[];
+extern char trampoline_start[], uservec[], userret[];
 
 // in kernelvec.S, calls kerneltrap().
-void kernelvec();
+void kernelvec(void);
 
-extern int devintr();
+extern int devintr(void);
 
 void
 trapinit(void)
@@ -22,147 +22,135 @@ trapinit(void)
   initlock(&tickslock, "time");
 }
 
-// set up to take exceptions and traps while in the kernel.
+// CPUTwo: EVEC is a table of handler function addresses.
+// We keep two tables: one pointing everything at uservec (user mode),
+// and one pointing everything at kernelvec (kernel mode / early boot).
+// trapinithart() is called once per CPU to write the EVEC base address.
+// prepare_return() updates entries before returning to user space.
+
+// The EVEC table lives in start.c (static uint32 evec_table[16]).
+// Expose the uservec address so prepare_return() can install it.
+
 void
 trapinithart(void)
 {
-  w_stvec((uint64)kernelvec);
+  // Nothing to do: EVEC is set up in start.c and uservec entries are
+  // installed by prepare_return() before first return to user mode.
+  // (On RISC-V this set stvec = kernelvec; on CPUTwo, kernelvec is
+  // unreachable in supervisor mode due to double-fault halting.)
 }
 
 //
-// handle an interrupt, exception, or system call from user space.
-// called from, and returns to, trampoline.S
-// return value is user satp for trampoline.S to switch to.
+// Handle an interrupt, exception, or system call from user space.
+// Called from uservec in trampoline.S.
+// Returns the user SATP value for trampoline's userret to switch to.
 //
-uint64
+uint32
 usertrap(void)
 {
+  struct proc *p = myproc();
+
+  // Read the cause from the supervisor CAUSE register.
+  uint32 cause = r_cause();
+
+  // Save the user PC (already saved to trapframe->epc by uservec, but
+  // also read here for the syscall case where we need to advance past
+  // the SYSCALL instruction).
+  // EPC was written to trapframe->epc in uservec; nothing else to do here.
+
   int which_dev = 0;
 
-  if((r_sstatus() & SSTATUS_SPP) != 0)
-    panic("usertrap: not from user mode");
-
-  // send interrupts and exceptions to kerneltrap(),
-  // since we're now in the kernel.
-  w_stvec((uint64)kernelvec);  //DOC: kernelvec
-
-  struct proc *p = myproc();
-  
-  // save user program counter.
-  p->trapframe->epc = r_sepc();
-  
-  if(r_scause() == 8){
-    // system call
+  if(cause == CAUSE_SYSCALL) {
+    // System call.  EPC already points to PC+4 (return address past SYSCALL).
 
     if(killed(p))
       kexit(-1);
 
-    // sepc points to the ecall instruction,
-    // but we want to return to the next instruction.
-    p->trapframe->epc += 4;
-
-    // an interrupt will change sepc, scause, and sstatus,
-    // so enable only now that we're done with those registers.
-    intr_on();
+    // Re-enable... actually on CPUTwo we keep interrupts disabled in supervisor
+    // mode (any interrupt in supervisor mode halts via double-fault).
+    // Do NOT call intr_on() here.
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
-    // ok
-  } else if((r_scause() == 15 || r_scause() == 13) &&
-            vmfault(p->pagetable, r_stval(), (r_scause() == 13)? 1 : 0) != 0) {
-    // page fault on lazily-allocated page
+
+  } else if((which_dev = devintr()) != 0) {
+    // Device interrupt — handled by devintr().
+
+  } else if((cause == CAUSE_SPGFAULT || cause == CAUSE_LPGFAULT) &&
+            vmfault(p->pagetable, r_badaddr(), (cause == CAUSE_LPGFAULT) ? 1 : 0) != 0) {
+    // Page fault on lazily-allocated page.
+
   } else {
-    printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
+    printf("usertrap(): unexpected cause 0x%x pid=%d\n", cause, p->pid);
+    printf("            epc=0x%x badaddr=0x%x\n", p->trapframe->epc, r_badaddr());
     setkilled(p);
   }
 
   if(killed(p))
     kexit(-1);
 
-  // give up the CPU if this is a timer interrupt.
+  // Give up the CPU if this is a timer interrupt.
   if(which_dev == 2)
     yield();
 
   prepare_return();
 
-  // the user page table to switch to, for trampoline.S
-  uint64 satp = MAKE_SATP(p->pagetable);
-
-  // return to trampoline.S; satp value in a0.
-  return satp;
+  // Return the user SATP so userret can switch page tables.
+  return MAKE_SATP(p->pagetable);
 }
 
 //
-// set up trapframe and control registers for a return to user space
+// Set up trapframe and supervisor registers for a return to user space.
 //
 void
 prepare_return(void)
 {
   struct proc *p = myproc();
 
-  // we're about to switch the destination of traps from
-  // kerneltrap() to usertrap(). because a trap from kernel
-  // code to usertrap would be a disaster, turn off interrupts.
-  intr_off();
+  // Interrupts stay off in supervisor mode (CPUTwo double-fault rule).
+  // Do not call intr_on() or intr_off() here.
 
-  // send syscalls, interrupts, and exceptions to uservec in trampoline.S
-  uint64 trampoline_uservec = TRAMPOLINE + (uservec - trampoline);
-  w_stvec(trampoline_uservec);
+  // Update the EVEC table so all traps go to uservec while user code runs.
+  // uservec is at TRAMPOLINE + (uservec - trampoline).
+  uint32 trampoline_uservec = TRAMPOLINE + (uint32)(uservec - trampoline_start);
 
-  // set up trapframe values that uservec will need when
-  // the process next traps into the kernel.
-  p->trapframe->kernel_satp = r_satp();         // kernel page table
-  p->trapframe->kernel_sp = p->kstack + PGSIZE; // process's kernel stack
-  p->trapframe->kernel_trap = (uint64)usertrap;
-  p->trapframe->kernel_hartid = r_tp();         // hartid for cpuid()
+  // Write all EVEC slots (including hardware interrupt, cause 6) to uservec.
+  // EVEC is stored in evec_table[] in start.c; its address is in REG_EVEC.
+  uint32 *evec = (uint32 *)r_evec();
+  for(int i = 0; i < 10; i++)
+    evec[i] = trampoline_uservec;
 
-  // set up the registers that trampoline.S's sret will use
-  // to get to user space.
-  
-  // set S Previous Privilege mode to User.
-  unsigned long x = r_sstatus();
-  x &= ~SSTATUS_SPP; // clear SPP to 0 for user mode
-  x |= SSTATUS_SPIE; // enable interrupts in user mode
-  w_sstatus(x);
+  // Fill trapframe fields that uservec needs next time this process traps.
+  p->trapframe->kernel_satp   = r_satp();
+  p->trapframe->kernel_sp     = p->kstack + PGSIZE;
+  p->trapframe->kernel_trap   = (uint32)usertrap;
+  p->trapframe->kernel_hartid = 0;  // CPUTwo single-CPU; r11 is frame pointer in C ABI
 
-  // set S Exception Program Counter to the saved user pc.
-  w_sepc(p->trapframe->epc);
+  // Set up supervisor registers for SYSRET:
+  //   REG_EPC  = user return address (already in trapframe->epc; write MMIO)
+  //   REG_ESTATUS = STATUS_IE (bit 1) — SYSRET forces bit 0 clear (user mode)
+  //                 so user resumes with interrupts enabled.
+  w_epc(p->trapframe->epc);
+  mmio_w(REG_EFLAGS, 0);                   // restore user flags as 0
+  mmio_w(REG_ESTATUS, STATUS_IE);          // user gets IE=1, supervisor=0
 }
 
-// interrupts and exceptions from kernel code go here via kernelvec,
-// on whatever the current kernel stack is.
-void 
-kerneltrap()
+//
+// Called from kernelvec.S on early-boot kernel-mode exceptions.
+// In normal operation, CPUTwo halts before this runs (double-fault rule).
+//
+void
+kerneltrap(void)
 {
-  int which_dev = 0;
-  uint64 sepc = r_sepc();
-  uint64 sstatus = r_sstatus();
-  uint64 scause = r_scause();
-  
-  if((sstatus & SSTATUS_SPP) == 0)
-    panic("kerneltrap: not from supervisor mode");
-  if(intr_get() != 0)
-    panic("kerneltrap: interrupts enabled");
+  uint32 cause  = r_cause();
+  uint32 epc    = r_epc();
+  uint32 baddr  = r_badaddr();
 
-  if((which_dev = devintr()) == 0){
-    // interrupt or trap from an unknown source
-    printf("scause=0x%lx sepc=0x%lx stval=0x%lx\n", scause, r_sepc(), r_stval());
-    panic("kerneltrap");
-  }
-
-  // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2 && myproc() != 0)
-    yield();
-
-  // the yield() may have caused some traps to occur,
-  // so restore trap registers for use by kernelvec.S's sepc instruction.
-  w_sepc(sepc);
-  w_sstatus(sstatus);
+  printf("kerneltrap: cause=0x%x epc=0x%x badaddr=0x%x\n", cause, epc, baddr);
+  panic("kerneltrap");
 }
 
 void
-clockintr()
+clockintr(void)
 {
   if(cpuid() == 0){
     acquire(&tickslock);
@@ -171,49 +159,44 @@ clockintr()
     release(&tickslock);
   }
 
-  // ask for the next timer interrupt. this also clears
-  // the interrupt request. 1000000 is about a tenth
-  // of a second.
-  w_stimecmp(r_time() + 1000000);
+  // Acknowledge the timer interrupt in the IC.
+  mmio_w(IC_ACK, IC_BIT_TIMER);
+
+  // The timer is periodic; it automatically reloads — no need to reprogram.
 }
 
-// check if it's an external interrupt or software interrupt,
-// and handle it.
-// returns 2 if timer interrupt,
-// 1 if other device,
-// 0 if not recognized.
+//
+// Check for device interrupts (cause 6) and handle them.
+// Returns 2 for timer interrupt, 1 for other device, 0 if not recognised.
+//
 int
-devintr()
+devintr(void)
 {
-  uint64 scause = r_scause();
+  uint32 cause = r_cause();
 
-  if(scause == 0x8000000000000009L){
-    // this is a supervisor external interrupt, via PLIC.
+  if(cause == CAUSE_IRQ) {
+    uint32 pending = mmio_r(IC_PENDING);
 
-    // irq indicates which device interrupted.
-    int irq = plic_claim();
-
-    if(irq == UART0_IRQ){
+    if(pending & IC_BIT_TIMER) {
+      clockintr();
+      return 2;
+    } else if(pending & IC_BIT_UART_RX) {
       uartintr();
-    } else if(irq == VIRTIO0_IRQ){
+      mmio_w(IC_ACK, IC_BIT_UART_RX);
+      return 1;
+    } else if(pending & IC_BIT_UART_TX) {
+      uartintr();   // handles TX completion too
+      mmio_w(IC_ACK, IC_BIT_UART_TX);
+      return 1;
+    } else if(pending & IC_BIT_BLKDEV) {
       virtio_disk_intr();
-    } else if(irq){
-      printf("unexpected interrupt irq=%d\n", irq);
+      mmio_w(IC_ACK, IC_BIT_BLKDEV);
+      return 1;
+    } else if(pending) {
+      printf("unexpected interrupt pending=0x%x\n", pending);
     }
-
-    // the PLIC allows each device to raise at most one
-    // interrupt at a time; tell the PLIC the device is
-    // now allowed to interrupt again.
-    if(irq)
-      plic_complete(irq);
-
     return 1;
-  } else if(scause == 0x8000000000000005L){
-    // timer interrupt.
-    clockintr();
-    return 2;
-  } else {
-    return 0;
   }
-}
 
+  return 0;
+}

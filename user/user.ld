@@ -1,9 +1,9 @@
-OUTPUT_ARCH( "riscv" )
+OUTPUT_ARCH( "cputwo" )
 
 SECTIONS
 {
  . = 0x0;
- 
+
   .text : {
     *(.text .text.*)
   }
@@ -14,11 +14,6 @@ SECTIONS
     . = ALIGN(16);
     *(.rodata .rodata.*)
   }
-
-  .eh_frame : {
-       *(.eh_frame)
-       *(.eh_frame.*)
-   }
 
   . = ALIGN(0x1000);
   .data : {

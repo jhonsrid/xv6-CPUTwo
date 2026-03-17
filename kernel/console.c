@@ -18,7 +18,7 @@
 #include "fs.h"
 #include "file.h"
 #include "memlayout.h"
-#include "riscv.h"
+#include "cputwo.h"
 #include "defs.h"
 #include "proc.h"
 
@@ -42,23 +42,19 @@ consputc(int c)
   }
 }
 
-struct {
-  struct spinlock lock;
-  
-  // input circular buffer
 #define INPUT_BUF_SIZE 128
-  char buf[INPUT_BUF_SIZE];
-  uint r;  // Read index
-  uint w;  // Write index
-  uint e;  // Edit index
-} cons;
+struct spinlock cons_lock;
+char cons_buf[INPUT_BUF_SIZE];
+uint cons_r;  // Read index
+uint cons_w;  // Write index
+uint cons_e;  // Edit index
 
 //
 // user write() system calls to the console go here.
 // uses sleep() and UART interrupts.
 //
 int
-consolewrite(int user_src, uint64 src, int n)
+consolewrite(int user_src, uint32 src, int n)
 {
   char buf[32]; // move batches from user space to uart.
   int i = 0;
@@ -83,32 +79,32 @@ consolewrite(int user_src, uint64 src, int n)
 // or kernel address.
 //
 int
-consoleread(int user_dst, uint64 dst, int n)
+consoleread(int user_dst, uint32 dst, int n)
 {
   uint target;
   int c;
   char cbuf;
 
   target = n;
-  acquire(&cons.lock);
+  acquire(&cons_lock);
   while(n > 0){
     // wait until interrupt handler has put some
-    // input into cons.buffer.
-    while(cons.r == cons.w){
+    // input into cons_buffer.
+    while(cons_r == cons_w){
       if(killed(myproc())){
-        release(&cons.lock);
+        release(&cons_lock);
         return -1;
       }
-      sleep(&cons.r, &cons.lock);
+      sleep(&cons_r, &cons_lock);
     }
 
-    c = cons.buf[cons.r++ % INPUT_BUF_SIZE];
+    c = cons_buf[cons_r++ % INPUT_BUF_SIZE];
 
     if(c == C('D')){  // end-of-file
       if(n < target){
         // Save ^D for next time, to make sure
         // caller gets a 0-byte result.
-        cons.r--;
+        cons_r--;
       }
       break;
     }
@@ -127,7 +123,7 @@ consoleread(int user_dst, uint64 dst, int n)
       break;
     }
   }
-  release(&cons.lock);
+  release(&cons_lock);
 
   return target - n;
 }
@@ -135,59 +131,59 @@ consoleread(int user_dst, uint64 dst, int n)
 //
 // the console input interrupt handler.
 // uartintr() calls this for each input character.
-// do erase/kill processing, append to cons.buf,
+// do erase/kill processing, append to cons_buf,
 // wake up consoleread() if a whole line has arrived.
 //
 void
 consoleintr(int c)
 {
-  acquire(&cons.lock);
+  acquire(&cons_lock);
 
   switch(c){
   case C('P'):  // Print process list.
     procdump();
     break;
   case C('U'):  // Kill line.
-    while(cons.e != cons.w &&
-          cons.buf[(cons.e-1) % INPUT_BUF_SIZE] != '\n'){
-      cons.e--;
+    while(cons_e != cons_w &&
+          cons_buf[(cons_e-1) % INPUT_BUF_SIZE] != '\n'){
+      cons_e--;
       consputc(BACKSPACE);
     }
     break;
   case C('H'): // Backspace
   case '\x7f': // Delete key
-    if(cons.e != cons.w){
-      cons.e--;
+    if(cons_e != cons_w){
+      cons_e--;
       consputc(BACKSPACE);
     }
     break;
   default:
-    if(c != 0 && cons.e-cons.r < INPUT_BUF_SIZE){
+    if(c != 0 && cons_e-cons_r < INPUT_BUF_SIZE){
       c = (c == '\r') ? '\n' : c;
 
       // echo back to the user.
       consputc(c);
 
       // store for consumption by consoleread().
-      cons.buf[cons.e++ % INPUT_BUF_SIZE] = c;
+      cons_buf[cons_e++ % INPUT_BUF_SIZE] = c;
 
-      if(c == '\n' || c == C('D') || cons.e-cons.r == INPUT_BUF_SIZE){
+      if(c == '\n' || c == C('D') || cons_e-cons_r == INPUT_BUF_SIZE){
         // wake up consoleread() if a whole line (or end-of-file)
         // has arrived.
-        cons.w = cons.e;
-        wakeup(&cons.r);
+        cons_w = cons_e;
+        wakeup(&cons_r);
       }
     }
     break;
   }
   
-  release(&cons.lock);
+  release(&cons_lock);
 }
 
 void
 consoleinit(void)
 {
-  initlock(&cons.lock, "cons");
+  initlock(&cons_lock, "cons");
 
   uartinit();
 

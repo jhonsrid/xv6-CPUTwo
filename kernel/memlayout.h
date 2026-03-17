@@ -1,59 +1,54 @@
-// Physical memory layout
-
-// qemu -machine virt is set up like this,
-// based on qemu's hw/riscv/virt.c:
+// CPUTwo physical memory layout
 //
-// 00001000 -- boot ROM, provided by qemu
-// 02000000 -- CLINT
-// 0C000000 -- PLIC
-// 10000000 -- uart0 
-// 10001000 -- virtio disk 
-// 80000000 -- qemu's boot ROM loads the kernel here,
-//             then jumps here.
-// unused RAM after 80000000.
+// 0x00000000 -- kernel loads here (entry point, text, data)
+// 0x03EFFFFF -- top of usable RAM (63 MB minus MMIO region)
+// 0x03F00000 -- MMIO base (UART, timer, IC, block device, CPU control regs)
+// 0x03FFFFFF -- top of 64 MB address space
+//
+// Kernel virtual memory layout (after paging enabled, Sv32):
+// 0x00000000..PHYSTOP      -- direct-mapped kernel physical memory
+// 0x03EFF000               -- boot stack page (entry.S sp=0x03EFFFFC)
+// 0x03EFE000 = TRAMPOLINE  -- trampoline page (same VA in kernel and user)
+// 0x03EFD000 = TRAPFRAME   -- per-process trap frame
+// 0x03EFC000 = KSTACK(0)   -- kernel stack for proc 0 (guard at 0x03EFB000)
+//  ...
+// 0x03E7E000 = KSTACK(63)  -- kernel stack for proc 63
+// 0x03F00000               -- MMIO_BASE (bypasses MMU in emulator)
 
-// the kernel uses physical memory thus:
-// 80000000 -- entry.S, then kernel text and data
-// end -- start of kernel page allocation area
-// PHYSTOP -- end RAM used by the kernel
+// UART registers
+#define UART0      0x03F00000u
+#define UART0_IRQ  2u   // IC pending bit 1 (IC_BIT_UART_RX)
 
-// qemu puts UART registers here in physical memory.
-#define UART0 0x10000000L
-#define UART0_IRQ 10
+// Block device (replaces virtio)
+#define VIRTIO0      0x03F03000u
+#define VIRTIO0_IRQ  8u  // IC pending bit 3 (IC_BIT_BLKDEV)
 
-// virtio mmio interface
-#define VIRTIO0 0x10001000
-#define VIRTIO0_IRQ 1
+// The kernel loads at physical address 0.
+#define KERNBASE  0x00000000u
 
-// qemu puts platform-level interrupt controller (PLIC) here.
-#define PLIC 0x0c000000L
-#define PLIC_PRIORITY (PLIC + 0x0)
-#define PLIC_PENDING (PLIC + 0x1000)
-#define PLIC_SENABLE(hart) (PLIC + 0x2080 + (hart)*0x100)
-#define PLIC_SPRIORITY(hart) (PLIC + 0x201000 + (hart)*0x2000)
-#define PLIC_SCLAIM(hart) (PLIC + 0x201004 + (hart)*0x2000)
+// Top of usable physical RAM — the MMIO region begins here.
+// CPUTwo: 64 MB space; MMIO occupies top 1 MB (0x03F00000–0x03FFFFFF).
+// For emulator testing, limit to 4 MB to speed up kinit() page filling.
+// Full 63MB available: change to 0x03F00000u for production.
+#define PHYSTOP   0x00800000u
 
-// the kernel expects there to be RAM
-// for use by the kernel and user pages
-// from physical address 0x80000000 to PHYSTOP.
-#define KERNBASE 0x80000000L
-#define PHYSTOP (KERNBASE + 128*1024*1024)
+// Trampoline is mapped at the top of every address space (kernel + user).
+// CPUTwo: must be below MMIO_BASE (0x03F00000) because the emulator bypasses
+// the MMU for any VA >= MMIO_BASE, turning the VA directly into a PA.
+// Boot stack is at 0x03EFF000 (entry.S sets sp=0x03EFFFFC, one page).
+// TRAMPOLINE sits just below it; KSTACK(p) = TRAMPOLINE - (p+1)*2*PGSIZE.
+// KSTACK(0)=0x03EFC000 ... KSTACK(63)=0x03E7E000, all below MMIO_BASE.
+#define TRAMPOLINE  0x03EFE000u
 
-// map the trampoline page to the highest address,
-// in both user and kernel space.
-#define TRAMPOLINE (MAXVA - PGSIZE)
+// Kernel stacks: each process gets one page, with an invalid guard page above.
+#define KSTACK(p)   (TRAMPOLINE - ((p)+1) * 2 * PGSIZE)
 
-// map kernel stacks beneath the trampoline,
-// each surrounded by invalid guard pages.
-#define KSTACK(p) (TRAMPOLINE - ((p)+1)* 2*PGSIZE)
-
-// User memory layout.
-// Address zero first:
+// User memory layout (low VA):
 //   text
-//   original data and bss
+//   data / bss
 //   fixed-size stack
 //   expandable heap
 //   ...
-//   TRAPFRAME (p->trapframe, used by the trampoline)
-//   TRAMPOLINE (the same page as in the kernel)
-#define TRAPFRAME (TRAMPOLINE - PGSIZE)
+//   TRAPFRAME  (p->trapframe, written by kernel, read/written by trampoline)
+//   TRAMPOLINE
+#define TRAPFRAME   (TRAMPOLINE - PGSIZE)

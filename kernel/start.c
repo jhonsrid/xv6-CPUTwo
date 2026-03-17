@@ -1,66 +1,61 @@
 #include "types.h"
 #include "param.h"
 #include "memlayout.h"
-#include "riscv.h"
+#include "cputwo.h"
 #include "defs.h"
 
-void main();
-void timerinit();
+void main(void);
 
-// entry.S needs one stack per CPU.
-__attribute__ ((aligned (16))) char stack0[4096 * NCPU];
+// One 4096-byte stack per CPU, used before the kernel heap is up.
+__attribute__((aligned(16))) char stack0[4096 * NCPU];
 
-// entry.S jumps here in machine mode on stack0.
+// Exception handler addresses: one entry per cause code (10 causes, 0x00–0x09).
+// Filled by start(); written to REG_EVEC so the hardware can dispatch.
+static uint32 evec_table[16];
+
+// Forward declarations for trap entry points defined in trampoline.S/kernelvec.S
+void uservec(void);     // user-mode trap entry (trampoline.S)
+void kernelvec(void);   // kernel-mode trap entry (kernelvec.S)
+
+// entry.S jumps here in supervisor mode on the boot stack.
 void
-start()
+start(void)
 {
-  // set M Previous Privilege mode to Supervisor, for mret.
-  unsigned long x = r_mstatus();
-  x &= ~MSTATUS_MPP_MASK;
-  x |= MSTATUS_MPP_S;
-  w_mstatus(x);
+  // Disable MMU (SATP.EN = 0) — physical addressing until kvminit().
+  mmio_w(REG_SATP, 0);
 
-  // set M Exception Program Counter to main, for mret.
-  // requires gcc -mcmodel=medany
-  w_mepc((uint64)main);
+  // Build the exception vector table.
+  // Causes 0x00–0x05 (illegal/misalign/buserr/syscall/divzero/halt) and
+  // page faults (0x07–0x09) will be dispatched to kernelvec initially;
+  // trapinithart() switches user-trap causes to uservec via stvec equivalent.
+  // For now point everything at kernelvec so we get a clean panic on any trap
+  // before full initialisation is done.
+  for(int i = 0; i < 16; i++)
+    evec_table[i] = (uint32)kernelvec;
 
-  // disable paging for now.
-  w_satp(0);
+  // Write the EVEC table base address to the supervisor EVEC register.
+  mmio_w(REG_EVEC, (uint32)evec_table);
 
-  // delegate all interrupts and exceptions to supervisor mode.
-  w_medeleg(0xffff);
-  w_mideleg(0xffff);
-  w_sie(r_sie() | SIE_SEIE | SIE_STIE);
+  // Keep each CPU's hart id in r11 (our "tp" equivalent).
+  // entry.S already set r11 = 0 for hart 0; nothing to do here for
+  // single-CPU, but in principle we'd read a per-CPU MMIO register.
+  // (w_tp() is a no-op that just writes r11; already correct from entry.S)
 
-  // configure Physical Memory Protection to give supervisor mode
-  // access to all of physical memory.
-  w_pmpaddr0(0x3fffffffffffffull);
-  w_pmpcfg0(0xf);
-
-  // ask for clock interrupts.
-  timerinit();
-
-  // keep each CPU's hartid in its tp register, for cpuid().
-  int id = r_mhartid();
-  w_tp(id);
-
-  // switch to supervisor mode and jump to main().
-  asm volatile("mret");
+  // Jump to main().
+  main();
 }
 
-// ask each hart to generate timer interrupts.
+// ---------------------------------------------------------------------------
+// Timer initialisation — called from main() after consoleinit/printfinit.
+// ---------------------------------------------------------------------------
 void
-timerinit()
+timerinit(void)
 {
-  // enable supervisor-mode timer interrupts.
-  w_mie(r_mie() | MIE_STIE);
-  
-  // enable the sstc extension (i.e. stimecmp).
-  w_menvcfg(r_menvcfg() | (1L << 63)); 
-  
-  // allow supervisor to use stimecmp and time.
-  w_mcounteren(r_mcounteren() | 2);
-  
-  // ask for the very first timer interrupt.
-  w_stimecmp(r_time() + 1000000);
+  // Set the timer period to 100000 ticks (~tenth of a second at typical rates)
+  // and enable the timer with interrupts.
+  mmio_w(TIMER_PERIOD, 100000);
+  mmio_w(TIMER_CTRL, 0x3);  // bit0=enable, bit1=irq enable
+
+  // Enable the timer source in the interrupt controller.
+  mmio_w(IC_ENABLE, mmio_r(IC_ENABLE) | IC_BIT_TIMER);
 }

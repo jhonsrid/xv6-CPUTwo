@@ -18,37 +18,38 @@
 #include "param.h"
 #include "spinlock.h"
 #include "sleeplock.h"
-#include "riscv.h"
+#include "cputwo.h"
 #include "defs.h"
 #include "fs.h"
 #include "buf.h"
 
-struct {
-  struct spinlock lock;
-  struct buf buf[NBUF];
-
-  // Linked list of all buffers, through prev/next.
-  // Sorted by how recently the buffer was used.
-  // head.next is most recent, head.prev is least.
-  struct buf head;
-} bcache;
+struct spinlock bcache_lock;
+struct buf bcache_buf[NBUF];
+// Linked list of all buffers, through prev/next.
+// Sorted by how recently the buffer was used.
+// head.next is most recent, head.prev is least.
+struct buf bcache_head;
+// CPUTwo TCC bug: global struct fields after embedded struct use addend=0.
+// Use pointer access (bhead->next, bhead->prev) instead of bcache_head.next/prev.
+struct buf *bhead = &bcache_head;
 
 void
 binit(void)
 {
   struct buf *b;
+  int _n = NBUF;
 
-  initlock(&bcache.lock, "bcache");
+  initlock(&bcache_lock, "bcache");
 
   // Create linked list of buffers
-  bcache.head.prev = &bcache.head;
-  bcache.head.next = &bcache.head;
-  for(b = bcache.buf; b < bcache.buf+NBUF; b++){
-    b->next = bcache.head.next;
-    b->prev = &bcache.head;
+  bhead->prev = bhead;
+  bhead->next = bhead;
+  for(b = bcache_buf; b < bcache_buf+_n; b++){
+    b->next = bhead->next;
+    b->prev = bhead;
     initsleeplock(&b->lock, "buffer");
-    bcache.head.next->prev = b;
-    bcache.head.next = b;
+    bhead->next->prev = b;
+    bhead->next = b;
   }
 }
 
@@ -60,13 +61,13 @@ bget(uint dev, uint blockno)
 {
   struct buf *b;
 
-  acquire(&bcache.lock);
+  acquire(&bcache_lock);
 
   // Is the block already cached?
-  for(b = bcache.head.next; b != &bcache.head; b = b->next){
+  for(b = bhead->next; b != bhead; b = b->next){
     if(b->dev == dev && b->blockno == blockno){
       b->refcnt++;
-      release(&bcache.lock);
+      release(&bcache_lock);
       acquiresleep(&b->lock);
       return b;
     }
@@ -74,13 +75,13 @@ bget(uint dev, uint blockno)
 
   // Not cached.
   // Recycle the least recently used (LRU) unused buffer.
-  for(b = bcache.head.prev; b != &bcache.head; b = b->prev){
+  for(b = bhead->prev; b != bhead; b = b->prev){
     if(b->refcnt == 0) {
       b->dev = dev;
       b->blockno = blockno;
       b->valid = 0;
       b->refcnt = 1;
-      release(&bcache.lock);
+      release(&bcache_lock);
       acquiresleep(&b->lock);
       return b;
     }
@@ -121,33 +122,33 @@ brelse(struct buf *b)
 
   releasesleep(&b->lock);
 
-  acquire(&bcache.lock);
+  acquire(&bcache_lock);
   b->refcnt--;
   if (b->refcnt == 0) {
     // no one is waiting for it.
     b->next->prev = b->prev;
     b->prev->next = b->next;
-    b->next = bcache.head.next;
-    b->prev = &bcache.head;
-    bcache.head.next->prev = b;
-    bcache.head.next = b;
+    b->next = bhead->next;
+    b->prev = bhead;
+    bhead->next->prev = b;
+    bhead->next = b;
   }
   
-  release(&bcache.lock);
+  release(&bcache_lock);
 }
 
 void
 bpin(struct buf *b) {
-  acquire(&bcache.lock);
+  acquire(&bcache_lock);
   b->refcnt++;
-  release(&bcache.lock);
+  release(&bcache_lock);
 }
 
 void
 bunpin(struct buf *b) {
-  acquire(&bcache.lock);
+  acquire(&bcache_lock);
   b->refcnt--;
-  release(&bcache.lock);
+  release(&bcache_lock);
 }
 
 

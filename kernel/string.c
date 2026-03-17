@@ -4,10 +4,20 @@ void*
 memset(void *dst, int c, uint n)
 {
   char *cdst = (char *) dst;
-  int i;
-  for(i = 0; i < n; i++){
-    cdst[i] = c;
+  uint i;
+  uint word = (uint)(uchar)c;
+  word |= word << 8;
+  word |= word << 16;
+  // Word-aligned fill for speed
+  i = 0;
+  while(i < n && ((uint)(cdst+i) & 3))
+    cdst[i++] = c;
+  while(i + 4 <= n){
+    *(uint*)(cdst+i) = word;
+    i += 4;
   }
+  while(i < n)
+    cdst[i++] = c;
   return dst;
 }
 

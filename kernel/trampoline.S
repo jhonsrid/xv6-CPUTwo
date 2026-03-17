@@ -1,149 +1,149 @@
-        #
-        # low-level code to handle traps from user space into
-        # the kernel, and returns from kernel to user.
-        #
-        # the kernel maps the page holding this code
-        # at the same virtual address (TRAMPOLINE)
-        # in user and kernel space so that it continues
-        # to work when it switches page tables.
-        # kernel.ld causes this code to start at 
-        # a page boundary.
-        #
+// CPUTwo user/kernel trap trampoline.
+//
+// This page is mapped at TRAMPOLINE (MAXVA - PGSIZE = 0x7FFFF000) in both
+// the kernel and every user page table, so the code executes correctly after
+// any page table switch.
+//
+// Trapframe layout (must match struct trapframe in proc.h):
+//   +0   kernel_satp
+//   +4   kernel_sp
+//   +8   kernel_trap  (address of usertrap())
+//   +12  epc          (user PC; written here from REG_EPC)
+//   +16  kernel_hartid
+//   +20  r0 .. r14   (user registers; 15 words = 60 bytes)
+//
+// CPUTwo trap notes:
+//   - On any exception/interrupt from user mode, hardware sets supervisor mode,
+//     clears STATUS.IE, saves PC+4 (SYSCALL) or faulting PC (faults/IRQ)
+//     into REG_EPC, saves flags into REG_EFLAGS, sets CAUSE, and jumps to
+//     EVEC[cause * 4].
+//   - r14 (lr) is destroyed by hardware during the vector dispatch.
+//     We use it as our base-pointer scratch register inside uservec.
+//   - SYSRET: hardware restores PC = EPC, flags = EFLAGS,
+//     STATUS = ESTATUS & ~1 (user mode, IE from ESTATUS).
+//   - The MMIO region (>= 0x03F00000) always bypasses the MMU, so we can
+//     read/write supervisor registers even with the user page table active.
+//   - Writing SATP implicitly flushes all non-global TLB entries.
 
-#include "riscv.h"
-#include "memlayout.h"
+// Assembler constants (must match cputwo.h / memlayout.h)
+// REG_EPC     = 0x03FFF000 -> movi r, 0xF000 / movhi r, 0x03FF
+// REG_SATP    = 0x03FFF018 -> movi r, 0xF018 / movhi r, 0x03FF
+// TRAPFRAME   = 0x7FFFE000 -> movi r, 0xE000 / movhi r, 0x7FFF
 
-.section trampsec
-.globl trampoline
-.globl usertrap
-trampoline:
-.align 4
-.globl uservec
-uservec:    
-	#
-        # trap.c sets stvec to point here, so
-        # traps from user space start here,
-        # in supervisor mode, but with a
-        # user page table.
-        #
+// Place trampoline on a fresh page boundary so we can map it at TRAMPOLINE.
+.section .text
+.align 4096
+.global trampoline_start
+trampoline_start:
+.global uservec
+uservec:
+        // ---------------------------------------------------------------
+        // Entry: user mode just trapped; we are now in supervisor mode.
+        // r14 (lr) has been clobbered by hardware during vector dispatch.
+        // Use r14 as a scratch base register pointing at TRAPFRAME.
+        // ---------------------------------------------------------------
 
-        # save user a0 in sscratch so
-        # a0 can be used to get at TRAPFRAME.
-        csrw sscratch, a0
+        // Load TRAPFRAME = 0x7FFFE000 into r14.
+        movi  lr, 0xE000             // lr = 0x0000E000
+        movhi lr, 0x7FFF             // lr = 0x7FFFE000 = TRAPFRAME
 
-        # each process has a separate p->trapframe memory area,
-        # but it's mapped to the same virtual address
-        # (TRAPFRAME) in every process's user page table.
-        li a0, TRAPFRAME
-        
-        # save the user registers in TRAPFRAME
-        sd ra, 40(a0)
-        sd sp, 48(a0)
-        sd gp, 56(a0)
-        sd tp, 64(a0)
-        sd t0, 72(a0)
-        sd t1, 80(a0)
-        sd t2, 88(a0)
-        sd s0, 96(a0)
-        sd s1, 104(a0)
-        sd a1, 120(a0)
-        sd a2, 128(a0)
-        sd a3, 136(a0)
-        sd a4, 144(a0)
-        sd a5, 152(a0)
-        sd a6, 160(a0)
-        sd a7, 168(a0)
-        sd s2, 176(a0)
-        sd s3, 184(a0)
-        sd s4, 192(a0)
-        sd s5, 200(a0)
-        sd s6, 208(a0)
-        sd s7, 216(a0)
-        sd s8, 224(a0)
-        sd s9, 232(a0)
-        sd s10, 240(a0)
-        sd s11, 248(a0)
-        sd t3, 256(a0)
-        sd t4, 264(a0)
-        sd t5, 272(a0)
-        sd t6, 280(a0)
+        // Save user registers r0-r13 (r14 is clobbered, will save 0 below).
+        sw r0,  20(lr)
+        sw r1,  24(lr)
+        sw r2,  28(lr)
+        sw r3,  32(lr)
+        sw r4,  36(lr)
+        sw r5,  40(lr)
+        sw r6,  44(lr)
+        sw r7,  48(lr)
+        sw r8,  52(lr)
+        sw r9,  56(lr)
+        sw r10, 60(lr)
+        sw r11, 64(lr)
+        sw r12, 68(lr)
+        sw r13, 72(lr)   // user sp
 
-	# save the user a0 in p->trapframe->a0
-        csrr t0, sscratch
-        sd t0, 112(a0)
+        // r14 was clobbered by hardware; save 0 as a placeholder.
+        movi  r0, 0
+        sw    r0, 76(lr)
 
-        # initialize kernel stack pointer, from p->trapframe->kernel_sp
-        ld sp, 8(a0)
+        // Read REG_EPC (user return address) and save to trapframe->epc.
+        // REG_EPC = 0x03FFF000
+        movi  r0, 0xF000
+        movhi r0, 0x03FF             // r0 = 0x03FFF000 = REG_EPC
+        lw    r0, 0(r0)              // r0 = *REG_EPC
+        sw    r0, 12(lr)             // trapframe->epc = user PC
 
-        # make tp hold the current hartid, from p->trapframe->kernel_hartid
-        ld tp, 32(a0)
+        // Switch to the kernel stack.
+        lw    r13, 4(lr)             // sp = trapframe->kernel_sp
 
-        # load the address of usertrap(), from p->trapframe->kernel_trap
-        ld t0, 16(a0)
+        // Restore kernel hartid into r11.
+        lw    r11, 16(lr)            // r11 = trapframe->kernel_hartid
 
-        # fetch the kernel page table address, from p->trapframe->kernel_satp.
-        ld t1, 0(a0)
+        // Load address of usertrap() into r0.
+        lw    r0, 8(lr)              // r0 = trapframe->kernel_trap = usertrap
 
-        # wait for any previous memory operations to complete, so that
-        # they use the user page table.
-        sfence.vma zero, zero
+        // Load kernel SATP into r1.
+        lw    r1, 0(lr)              // r1 = trapframe->kernel_satp
 
-        # install the kernel page table.
-        csrw satp, t1
+        // Switch to kernel page table.
+        // REG_SATP = 0x03FFF018 (MMIO; always bypasses translation).
+        movi  r2, 0xF018
+        movhi r2, 0x03FF             // r2 = 0x03FFF018 = REG_SATP
+        sw    r1, 0(r2)              // *REG_SATP = kernel SATP (flushes TLB)
 
-        # flush now-stale user entries from the TLB.
-        sfence.vma zero, zero
+        // Call usertrap().  callr lr, r0  →  lr = PC+4, PC = r0.
+        // usertrap() never returns to this call site; it calls usertrapret()
+        // which calls userret below.
+        callr lr, r0
 
-        # call usertrap()
-        jalr t0
+        // Should never reach here.
+.global uservec_end
+uservec_end:
 
-.globl userret
+// ---------------------------------------------------------------------------
+// userret(uint32 satp)
+//
+// Called from usertrapret() in trap.c with r0 = user SATP value.
+// Restores user registers from TRAPFRAME and executes SYSRET.
+// ---------------------------------------------------------------------------
+.global userret
 userret:
-        # usertrap() returns here, with user satp in a0.
-        # return from kernel to user.
+        // r0 = new user SATP value (first argument from usertrapret).
 
-        # switch to the user page table.
-        sfence.vma zero, zero
-        csrw satp, a0
-        sfence.vma zero, zero
+        // Load TRAPFRAME address into r1 (r1 will be restored from trapframe).
+        movi  r1, 0xE000
+        movhi r1, 0x7FFF             // r1 = 0x7FFFE000 = TRAPFRAME
 
-        li a0, TRAPFRAME
+        // Switch to user page table.
+        // REG_SATP = 0x03FFF018 — use r2 as temp (r2 will be restored).
+        movi  r2, 0xF018
+        movhi r2, 0x03FF             // r2 = 0x03FFF018 = REG_SATP
+        sw    r0, 0(r2)              // *REG_SATP = user SATP (flushes TLB)
 
-        # restore all but a0 from TRAPFRAME
-        ld ra, 40(a0)
-        ld sp, 48(a0)
-        ld gp, 56(a0)
-        ld tp, 64(a0)
-        ld t0, 72(a0)
-        ld t1, 80(a0)
-        ld t2, 88(a0)
-        ld s0, 96(a0)
-        ld s1, 104(a0)
-        ld a1, 120(a0)
-        ld a2, 128(a0)
-        ld a3, 136(a0)
-        ld a4, 144(a0)
-        ld a5, 152(a0)
-        ld a6, 160(a0)
-        ld a7, 168(a0)
-        ld s2, 176(a0)
-        ld s3, 184(a0)
-        ld s4, 192(a0)
-        ld s5, 200(a0)
-        ld s6, 208(a0)
-        ld s7, 216(a0)
-        ld s8, 224(a0)
-        ld s9, 232(a0)
-        ld s10, 240(a0)
-        ld s11, 248(a0)
-        ld t3, 256(a0)
-        ld t4, 264(a0)
-        ld t5, 272(a0)
-        ld t6, 280(a0)
+        // TRAPFRAME is mapped in the user page table, so we can still read it.
+        // Restore user registers.  Restore r0, r2-r13 first, then r1 last
+        // (r1 is our base pointer — destroying it is safe as the last step).
+        lw    r0,  20(r1)            // restore r0
+        // skip r1 (base pointer, restored last)
+        lw    r2,  28(r1)            // restore r2
+        lw    r3,  32(r1)
+        lw    r4,  36(r1)
+        lw    r5,  40(r1)
+        lw    r6,  44(r1)
+        lw    r7,  48(r1)
+        lw    r8,  52(r1)
+        lw    r9,  56(r1)
+        lw    r10, 60(r1)
+        lw    r11, 64(r1)
+        lw    r12, 68(r1)
+        lw    r13, 72(r1)            // restore user sp
+        // r14 (lr) is clobbered by hardware anyway; restore 0 (placeholder).
+        lw    lr,  76(r1)
 
-	# restore user a0
-        ld a0, 112(a0)
-        
-        # return to user mode and user pc.
-        # usertrapret() set up sstatus and sepc.
-        sret
+        // Restore r1 last (destroys our base pointer; safe since SYSRET is next).
+        lw    r1,  24(r1)
+
+        // Return to user mode.
+        // Hardware: PC = REG_EPC, flags = REG_EFLAGS, STATUS = ESTATUS & ~1.
+        sysret

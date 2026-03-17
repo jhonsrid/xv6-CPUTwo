@@ -1,21 +1,24 @@
-        # qemu -kernel loads the kernel at 0x80000000
-        # and causes each hart (i.e. CPU) to jump there.
-        # kernel.ld causes the following code to
-        # be placed at 0x80000000.
+// CPUTwo kernel entry point.
+//
+// The emulator loads the kernel ELF and starts at the ELF entry point
+// (_entry).  We don't need a physical reset vector at 0x0; the ELF entry
+// point can be anywhere.  The kernel is linked at 0x1000.
+
 .section .text
 .global _entry
 _entry:
-        # set up a stack for C.
-        # stack0 is declared in start.c,
-        # with a 4096-byte stack per CPU.
-        # sp = stack0 + ((hartid + 1) * 4096)
-        la sp, stack0
-        li a0, 1024*4
-        csrr a1, mhartid
-        addi a1, a1, 1
-        mul a0, a0, a1
-        add sp, sp, a0
-        # jump to start() in start.c
-        call start
+        // Hart ID: CPUTwo has no hartid register.  Use 0 (single-CPU).
+        // Keep hart ID in r11 (used as tp by the kernel).
+        movi  r11, 0
+
+        // Set up an initial supervisor stack at 0x03EFFFFC —
+        // one word below the MMIO base, safe to use before start() runs.
+        // Use movi+movhi to load the 32-bit constant into sp (r13).
+        movi  r13, 0xFFFC       // r13 = 0x0000FFFC
+        movhi r13, 0x03EF       // r13 = 0x03EFFFFC
+
+        // Call start() in start.c (PC-relative branch through lr).
+        jmp   lr, start
+
 spin:
-        j spin
+        ba    spin              // should never reach here
