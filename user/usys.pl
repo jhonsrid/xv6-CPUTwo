@@ -28,13 +28,19 @@ sub entry {
     # shift them all up by one slot (r0→r1, r1→r2, r2→r3) to make room
     # for the syscall number.
     #
-    # Shift: r3=r2, r2=r1, r1=r0, r0=SYS_name
+    # Save lr before SYSCALL (hardware clobbers r14 on trap entry).
+    # Shift args: r3=r2, r2=r1, r1=r0, r0=SYS_name
+    print " addi r13, r13, -4\n";   # push lr
+    print " sw r14, 0(r13)\n";
     print " mov r3, r2\n";
     print " mov r2, r1\n";
     print " mov r1, r0\n";
     print " movi r0, SYS_${name}\n";
     print " syscall\n";
-    print " mov r15, r14\n";   # ret
+    # After SYSRET: r0 = return value, sp restored, lr = 0 (clobbered).
+    print " lw r14, 0(r13)\n";      # restore lr
+    print " addi r13, r13, 4\n";    # pop
+    print " mov r15, r14\n";        # ret
 }
 
 entry("fork");

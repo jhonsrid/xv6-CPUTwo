@@ -51,22 +51,20 @@ uint cons_e;  // Edit index
 
 //
 // user write() system calls to the console go here.
-// uses sleep() and UART interrupts.
+// CPUTwo: use synchronous (polling) output because interrupt-driven TX
+// deadlocks — sleep() puts the process in supervisor mode where any
+// interrupt causes a double fault / halt.
 //
 int
 consolewrite(int user_src, uint32 src, int n)
 {
-  char buf[32]; // move batches from user space to uart.
-  int i = 0;
+  int i;
 
-  while(i < n){
-    int nn = sizeof(buf);
-    if(nn > n - i)
-      nn = n - i;
-    if(either_copyin(buf, user_src, src+i, nn) == -1)
+  for(i = 0; i < n; i++){
+    char c;
+    if(either_copyin(&c, user_src, src+i, 1) == -1)
       break;
-    uartwrite(buf, nn);
-    i += nn;
+    uartputc_sync(c);
   }
 
   return i;

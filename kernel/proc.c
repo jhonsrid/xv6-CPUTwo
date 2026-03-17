@@ -433,7 +433,7 @@ scheduler(void)
   struct cpu *c = mycpu();
 
   c->proc = 0;
-  printf("scheduler: starting loop, proc_end=0x%x\n", (uint32)proc_end);
+  //printf("scheduler: starting loop, proc_end=0x%x\n", (uint32)proc_end);
   for(;;){
     // CPUTwo: do NOT call intr_on() here — any interrupt/exception in
     // supervisor mode causes an immediate CPU halt (double-fault).
@@ -448,8 +448,8 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
-        printf("scheduler: swtch to pid=%d context.lr=0x%x sp=0x%x\n",
-               p->pid, p->context.lr, p->context.sp);
+        //printf("scheduler: swtch to pid=%d context.lr=0x%x sp=0x%x\n",
+        //       p->pid, p->context.lr, p->context.sp);
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
@@ -512,23 +512,23 @@ void
 forkret(void)
 {
   extern char userret[];
-  printf("forkret: entry\n");
+  //printf("forkret: entry\n");
   static int first = 1;
-  printf("forkret: calling myproc\n");
+  //printf("forkret: calling myproc\n");
   struct proc *p = myproc();
-  printf("forkret: myproc returned p=0x%x\n", (uint32)p);
+  //printf("forkret: myproc returned p=0x%x\n", (uint32)p);
 
   // Still holding p->lock from scheduler.
   release(&p->lock);
-  printf("forkret: released p->lock\n");
+  //printf("forkret: released p->lock\n");
 
   if (first) {
     // File system initialization must be run in the context of a
     // regular process (e.g., because it calls sleep), and thus cannot
     // be run from main().
-    printf("forkret: calling fsinit\n");
+    //printf("forkret: calling fsinit\n");
     fsinit(ROOTDEV);
-    printf("forkret: fsinit done\n");
+    //printf("forkret: fsinit done\n");
 
     first = 0;
     // ensure other cores see first=0.

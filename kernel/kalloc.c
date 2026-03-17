@@ -23,11 +23,11 @@ struct run *kmem_freelist;
 void
 kinit()
 {
-  printf("kinit: _end=0x%x PHYSTOP=0x%x\n", (uint32)_end, (uint32)PHYSTOP);
+  //printf("kinit: _end=0x%x PHYSTOP=0x%x\n", (uint32)_end, (uint32)PHYSTOP);
   initlock(&kmem_lock, "kmem");
-  printf("kinit: freelist before freerange=0x%x\n", (uint32)kmem_freelist);
+  //printf("kinit: freelist before freerange=0x%x\n", (uint32)kmem_freelist);
   freerange(_end, (void*)PHYSTOP);
-  printf("kinit: freelist after freerange=0x%x\n", (uint32)kmem_freelist);
+  //printf("kinit: freelist after freerange=0x%x\n", (uint32)kmem_freelist);
 }
 
 void
@@ -52,7 +52,7 @@ kfree(void *pa)
     panic("kfree");
 
   // Fill with junk to catch dangling refs.
-  memset(pa, 1, PGSIZE);
+  // memset(pa, 1, PGSIZE);  // CPUTwo: emulator zeros all RAM at reset
 
   r = (struct run*)pa;
 
@@ -76,8 +76,7 @@ kalloc(void)
     kmem_freelist = r->next;
   release(&kmem_lock);
 
-  if(r)
-    memset((char*)r, 5, PGSIZE); // fill with junk
-  printf("kalloc: returning 0x%x\n", (uint32)r);
+  // if(r)
+  //   memset((char*)r, 5, PGSIZE); // CPUTwo: emulator zeros all RAM at reset
   return (void*)r;
 }

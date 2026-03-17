@@ -61,7 +61,7 @@ tags: $(OBJS)
 ULIB = $U/ulib.o $U/usys.o $U/printf.o $U/umalloc.o
 
 _%: %.o $(ULIB)
-	$(LD) -B/Users/john/tinycc_CPUTwo -nostdlib -static $(LDFLAGS) -Wl,-Ttext=0x0 -o $@ $< $(ULIB)
+	$(LD) -B/Users/john/tinycc_CPUTwo -nostdlib -static $(LDFLAGS) -Wl,-Ttext=0x0 -Wl,-e,start -o $@ $< $(ULIB)
 
 $U/usys.S: $U/usys.pl
 	perl $U/usys.pl > $U/usys.S
@@ -70,7 +70,7 @@ $U/usys.o: $U/usys.S
 	$(CC) $(CFLAGS) -c -o $U/usys.o $U/usys.S
 
 $U/_forktest: $U/forktest.o $(ULIB)
-	$(LD) -B/Users/john/tinycc_CPUTwo -nostdlib -static $(LDFLAGS) -Wl,-Ttext=0x0 -o $U/_forktest $U/forktest.o $U/ulib.o $U/usys.o
+	$(LD) -B/Users/john/tinycc_CPUTwo -nostdlib -static $(LDFLAGS) -Wl,-Ttext=0x0 -Wl,-e,start -o $U/_forktest $U/forktest.o $U/ulib.o $U/usys.o
 
 # Compile user .c files
 $U/%.o: $U/%.c

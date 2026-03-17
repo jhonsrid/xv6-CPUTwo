@@ -61,19 +61,19 @@ virtio_disk_rw(struct buf *b, int write)
 
   // Issue one 512-byte sector I/O per loop iteration.
   // SECTORS_PER_BLOCK=2 for BSIZE=1024.
-  printf("virtio_disk_rw: blockno=%d write=%d bounce=0x%x\n",
-         b->blockno, write, (uint32)bounce);
+  //printf("virtio_disk_rw: blockno=%d write=%d bounce=0x%x\n",
+  //       b->blockno, write, (uint32)bounce);
   for(int s = 0; s < SECTORS_PER_BLOCK; s++) {
     uint32 sector = b->blockno * SECTORS_PER_BLOCK + s;
     uint32 buf_pa = (uint32)(bounce + s * SECTOR_SIZE);
 
-    printf("  sector=%d buf_pa=0x%x\n", sector, buf_pa);
+    //printf("  sector=%d buf_pa=0x%x\n", sector, buf_pa);
     mmio_w(BLK_SECTOR, sector);
     mmio_w(BLK_BUFFER, buf_pa);
     mmio_w(BLK_CMD, write ? BLK_CMD_WRITE : BLK_CMD_READ);
 
     uint32 st = mmio_r(BLK_STATUS);
-    printf("  status after cmd=%d\n", st);
+    //printf("  status after cmd=%d\n", st);
     // Emulator completes synchronously; poll to confirm.
     while(st == BLK_STATUS_BUSY) {
       st = mmio_r(BLK_STATUS);

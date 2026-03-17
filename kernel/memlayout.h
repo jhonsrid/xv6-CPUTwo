@@ -38,6 +38,8 @@
 // Boot stack is at 0x03EFF000 (entry.S sets sp=0x03EFFFFC, one page).
 // TRAMPOLINE sits just below it; KSTACK(p) = TRAMPOLINE - (p+1)*2*PGSIZE.
 // KSTACK(0)=0x03EFC000 ... KSTACK(63)=0x03E7E000, all below MMIO_BASE.
+
+// WARNING: This MUST match the address in trampoline.S
 #define TRAMPOLINE  0x03EFE000u
 
 // Kernel stacks: each process gets one page, with an invalid guard page above.

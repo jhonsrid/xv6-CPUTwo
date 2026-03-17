@@ -1,8 +1,8 @@
 // CPUTwo user/kernel trap trampoline.
 //
-// This page is mapped at TRAMPOLINE (MAXVA - PGSIZE = 0x7FFFF000) in both
-// the kernel and every user page table, so the code executes correctly after
-// any page table switch.
+// This page is mapped at TRAMPOLINE (0x03EFE000) in both the kernel and
+// every user page table, so the code executes correctly after any page
+// table switch.
 //
 // Trapframe layout (must match struct trapframe in proc.h):
 //   +0   kernel_satp
@@ -28,7 +28,7 @@
 // Assembler constants (must match cputwo.h / memlayout.h)
 // REG_EPC     = 0x03FFF000 -> movi r, 0xF000 / movhi r, 0x03FF
 // REG_SATP    = 0x03FFF018 -> movi r, 0xF018 / movhi r, 0x03FF
-// TRAPFRAME   = 0x7FFFE000 -> movi r, 0xE000 / movhi r, 0x7FFF
+// TRAPFRAME   = 0x03EFD000 -> movi r, 0xD000 / movhi r, 0x03EF
 
 // Place trampoline on a fresh page boundary so we can map it at TRAMPOLINE.
 .section .text
@@ -43,9 +43,9 @@ uservec:
         // Use r14 as a scratch base register pointing at TRAPFRAME.
         // ---------------------------------------------------------------
 
-        // Load TRAPFRAME = 0x7FFFE000 into r14.
-        movi  lr, 0xE000             // lr = 0x0000E000
-        movhi lr, 0x7FFF             // lr = 0x7FFFE000 = TRAPFRAME
+        // Load TRAPFRAME = 0x03EFD000 into r14.
+        movi  lr, 0xD000             // lr = 0x0000D000
+        movhi lr, 0x03EF             // lr = 0x03EFD000 = TRAPFRAME
 
         // Save user registers r0-r13 (r14 is clobbered, will save 0 below).
         sw r0,  20(lr)
@@ -112,8 +112,8 @@ userret:
         // r0 = new user SATP value (first argument from usertrapret).
 
         // Load TRAPFRAME address into r1 (r1 will be restored from trapframe).
-        movi  r1, 0xE000
-        movhi r1, 0x7FFF             // r1 = 0x7FFFE000 = TRAPFRAME
+        movi  r1, 0xD000
+        movhi r1, 0x03EF             // r1 = 0x03EFD000 = TRAPFRAME
 
         // Switch to user page table.
         // REG_SATP = 0x03FFF018 — use r2 as temp (r2 will be restored).
