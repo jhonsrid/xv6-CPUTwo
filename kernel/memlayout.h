@@ -26,11 +26,11 @@
 // The kernel loads at physical address 0.
 #define KERNBASE  0x00000000u
 
-// Top of usable physical RAM — the MMIO region begins here.
-// CPUTwo: 64 MB space; MMIO occupies top 1 MB (0x03F00000–0x03FFFFFF).
-// For emulator testing, limit to 4 MB to speed up kinit() page filling.
-// Full 63MB available: change to 0x03F00000u for production.
-#define PHYSTOP   0x00800000u
+// Top of identity-mapped kernel RAM.  Physical RAM extends to 0x03F00000
+// (MMIO base), but the identity map must stop before the KSTACK/TRAMPOLINE
+// VA region (0x03E7E000+) to avoid remap conflicts.  KSTACK(63) is the
+// lowest kernel-stack VA, so PHYSTOP = KSTACK(NPROC-1).
+#define PHYSTOP   0x03E7E000u
 
 // Trampoline is mapped at the top of every address space (kernel + user).
 // CPUTwo: must be below MMIO_BASE (0x03F00000) because the emulator bypasses

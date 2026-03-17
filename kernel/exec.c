@@ -65,8 +65,6 @@ kexec(char *path, char **argv)
       goto bad;
     if(ph.vaddr + ph.memsz < ph.vaddr)
       goto bad;
-    if(ph.vaddr % PGSIZE != 0)
-      goto bad;
     uint32 sz1;
     if((sz1 = uvmalloc(pagetable, sz, ph.vaddr + ph.memsz, flags2perm(ph.flags))) == 0)
       goto bad;
@@ -157,17 +155,19 @@ loadseg(pagetable_t pagetable, uint32 va, struct inode *ip, uint offset, uint sz
   uint i, n;
   uint32 pa;
 
-  for(i = 0; i < sz; i += PGSIZE){
-    pa = walkaddr(pagetable, va + i);
+  for(i = 0; i < sz; ){
+    uint32 va1 = va + i;
+    uint32 off_in_page = va1 % PGSIZE;
+    pa = walkaddr(pagetable, va1);
     if(pa == 0)
       panic("loadseg: address should exist");
-    if(sz - i < PGSIZE)
+    n = PGSIZE - off_in_page;
+    if(sz - i < n)
       n = sz - i;
-    else
-      n = PGSIZE;
-    if(readi(ip, 0, (uint32)pa, offset+i, n) != n)
+    if(readi(ip, 0, (uint32)(pa + off_in_page), offset+i, n) != n)
       return -1;
+    i += n;
   }
-  
+
   return 0;
 }
