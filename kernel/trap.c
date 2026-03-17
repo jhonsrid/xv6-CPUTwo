@@ -209,28 +209,30 @@ devintr(void)
 }
 
 //
-// Poll for and handle pending device interrupts from supervisor mode.
+// Poll for and handle pending device events from supervisor mode.
 // Called from the scheduler's idle loop because CPUTwo cannot take
 // real interrupts in supervisor mode (double-fault halts the CPU).
+//
+// We check UART status directly rather than IC pending bits because
+// the UART RX interrupt is edge-triggered: ACKing the IC pending bit
+// after reading could race with a newly arrived byte, losing it.
 //
 void
 polldev(void)
 {
-  uint32 pending = mmio_r(IC_PENDING);
-
-  if(pending & IC_BIT_TIMER) {
+  // Timer: check IC pending (level-based; timer auto-reloads).
+  if(mmio_r(IC_PENDING) & IC_BIT_TIMER) {
     clockintr();
   }
-  if(pending & IC_BIT_UART_RX) {
-    uartintr();
+
+  // UART: check the device status register directly.
+  if(mmio_r(UART_STATUS) & UART_STATUS_RX_AVAIL) {
+    // Drain all available characters.
+    while(mmio_r(UART_STATUS) & UART_STATUS_RX_AVAIL) {
+      int c = mmio_r(UART_RX) & 0xFF;
+      consoleintr(c);
+    }
+    // Clear the IC pending bit (if any) now that we've drained.
     mmio_w(IC_ACK, IC_BIT_UART_RX);
-  }
-  if(pending & IC_BIT_UART_TX) {
-    uartintr();
-    mmio_w(IC_ACK, IC_BIT_UART_TX);
-  }
-  if(pending & IC_BIT_BLKDEV) {
-    virtio_disk_intr();
-    mmio_w(IC_ACK, IC_BIT_BLKDEV);
   }
 }
