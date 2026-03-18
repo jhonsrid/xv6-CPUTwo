@@ -503,23 +503,17 @@ void
 forkret(void)
 {
   extern char userret[];
-  //printf("forkret: entry\n");
   static int first = 1;
-  //printf("forkret: calling myproc\n");
   struct proc *p = myproc();
-  //printf("forkret: myproc returned p=0x%x\n", (uint32)p);
 
   // Still holding p->lock from scheduler.
   release(&p->lock);
-  //printf("forkret: released p->lock\n");
 
   if (first) {
     // File system initialization must be run in the context of a
     // regular process (e.g., because it calls sleep), and thus cannot
     // be run from main().
-    //printf("forkret: calling fsinit\n");
     fsinit(ROOTDEV);
-    //printf("forkret: fsinit done\n");
 
     first = 0;
     // ensure other cores see first=0.

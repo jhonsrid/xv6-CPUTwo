@@ -23,18 +23,13 @@ kvmmake(void)
 {
   pagetable_t kpgtbl;
 
-  //printf("kvmmake: calling kalloc\n");
   kpgtbl = (pagetable_t) kalloc();
-  //printf("kvmmake: kalloc returned 0x%x\n", (uint32)kpgtbl);
   memset(kpgtbl, 0, PGSIZE);
-  //printf("kvmmake: memset done\n");
 
   // Map the entire MMIO region R/W (bypasses MMU anyway, but needed in PT).
-  //printf("kvmmake: MMIO map\n");
   kvmmap(kpgtbl, 0x03F00000u, 0x03F00000u, 0x100000u, PTE_R | PTE_W);
 
   // Map all physical RAM R/W/X (kernel code + data, identity-mapped).
-  //printf("kvmmake: kernel RAM map\n");
   kvmmap(kpgtbl, KERNBASE, KERNBASE, PHYSTOP - KERNBASE, PTE_R | PTE_W | PTE_X);
 
   // Map the region between PHYSTOP and MMIO_BASE as R/W.
@@ -44,20 +39,16 @@ kvmmake(void)
   if(PHYSTOP < 0x03F00000u) {
     // Only map the actual boot stack page (entry.S sets sp=0x03EFFFFC).
     // A large identity-map here would conflict with kstack/trampoline mappings.
-    //printf("kvmmake: boot stack map\n");
     kvmmap(kpgtbl, 0x03EFF000u, 0x03EFF000u, PGSIZE, PTE_R | PTE_W);
   }
 
   // Map the trampoline at the highest virtual address (same in kernel and user).
   // The physical page hosting the trampoline code is trampoline_start (page-aligned).
-  //printf("kvmmake: trampoline map trampoline_start=0x%x\n", (uint32)trampoline_start);
   kvmmap(kpgtbl, TRAMPOLINE, (uint32)trampoline_start, PGSIZE, PTE_R | PTE_X);
 
   // Allocate and map a kernel stack for each process.
-  //printf("kvmmake: proc_mapstacks\n");
   proc_mapstacks(kpgtbl);
 
-  //printf("kvmmake: done\n");
   return kpgtbl;
 }
 
