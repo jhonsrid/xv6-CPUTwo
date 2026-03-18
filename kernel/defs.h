@@ -143,7 +143,6 @@ void            trapinithart(void);
 extern struct spinlock tickslock;
 void            prepare_return(void);
 int             devintr(void);
-void            polldev(void);
 
 // uart.c
 void            uartinit(void);

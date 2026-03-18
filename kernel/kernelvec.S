@@ -1,47 +1,85 @@
-// CPUTwo kernel trap vector.
+// CPUTwo kernel-mode trap handler.
 //
-// On CPUTwo, any exception/interrupt while the CPU is in supervisor mode
-// triggers an immediate halt (double-fault rule).  However, we keep
-// kernelvec as a valid entry point for two purposes:
-//   1. Exceptions from early boot (before user processes) should panic, not
-//      silently halt without a message.  By pointing EVEC entries here and
-//      having kernelvec print a message before halting, we get useful output.
-//   2. It satisfies the C forward declarations expected by trap.c and main.c.
+// Uses KRET (opcode 0x3F) for atomic return: PC=EPC, flags=EFLAGS,
+// STATUS=ESTATUS.  This avoids the race where a nested interrupt
+// between IE restore and jump could overwrite the return address.
 //
-// NOTE: In practice, this code is unreachable once the OS is running with
-// interrupts disabled in supervisor mode.  The double-fault rule means the
-// CPU halts before kernelvec can execute.
+// Stack frame (76 bytes = 19 words):
+//   sp+ 0..52: r0-r12, lr  (14 regs)
+//   sp+56: saved EPC
+//   sp+60: saved EFLAGS
+//   sp+64: saved ESTATUS
 
 .global kernelvec
 kernelvec:
-        // Save all caller-saved registers so kerneltrap() can print them.
-        // Use a hard-coded stack area just below MMIO (0x03EFFF00).
-        // This is the emergency stack; the normal kernel stack is up
-        // only after start() is called.
-        movi  r13, 0xFF00
-        movhi r13, 0x03EF            // sp = 0x03EFFF00 (emergency stack)
+        addi  r13, r13, -68
 
-        // Make room for 15 registers (r0-r14, except sp which we just set).
-        addi  r13, r13, -60
+        // Save all GPRs except sp/pc.
+        sw    r0,   0(r13)
+        sw    r1,   4(r13)
+        sw    r2,   8(r13)
+        sw    r3,  12(r13)
+        sw    r4,  16(r13)
+        sw    r5,  20(r13)
+        sw    r6,  24(r13)
+        sw    r7,  28(r13)
+        sw    r8,  32(r13)
+        sw    r9,  36(r13)
+        sw    r10, 40(r13)
+        sw    r11, 44(r13)
+        sw    r12, 48(r13)
+        sw    lr,  52(r13)
 
-        sw r0,  0(r13)
-        sw r1,  4(r13)
-        sw r2,  8(r13)
-        sw r3, 12(r13)
-        sw r4, 16(r13)
-        sw r5, 20(r13)
-        sw r6, 24(r13)
-        sw r7, 28(r13)
-        sw r8, 32(r13)
-        sw r9, 36(r13)
-        sw r10, 40(r13)
-        sw r11, 44(r13)
-        sw r12, 48(r13)
-        sw lr,  52(r13)
+        // Save supervisor state from MMIO.
+        movi  r0, 0xF000
+        movhi r0, 0x03FF              // r0 = REG_EPC
+        lw    r4, 0(r0)               // r4 = EPC
+        lw    r5, 4(r0)               // r5 = EFLAGS
+        sw    r4, 56(r13)             // save EPC
+        sw    r5, 60(r13)             // save EFLAGS
+        movi  r0, 0xF014
+        movhi r0, 0x03FF
+        lw    r0, 0(r0)               // r0 = ESTATUS
+        sw    r0, 64(r13)             // save ESTATUS
 
-        jmp   lr, kerneltrap         // call kerneltrap() to print panic info
+        // Call kerneltrap() via EVEC slot 15.
+        movi  r0, 0xF008
+        movhi r0, 0x03FF
+        lw    r0, 0(r0)               // r0 = EVEC table base
+        lw    r0, 60(r0)              // r0 = evec_table[15] = &kerneltrap
+        callr lr, r0
 
-        // kerneltrap() will halt via panic() or halt instruction.
-        // If it somehow returns, loop forever.
-1:
-        ba    1b
+        // --- Return from kerneltrap ---
+        // Write saved EPC, EFLAGS, ESTATUS back to MMIO registers
+        // so KRET can restore them atomically.
+        movi  r0, 0xF000
+        movhi r0, 0x03FF              // r0 = REG_EPC
+        lw    r1, 56(r13)             // r1 = saved EPC
+        lw    r2, 60(r13)             // r2 = saved EFLAGS
+        sw    r1, 0(r0)               // REG_EPC = saved EPC
+        sw    r2, 4(r0)               // REG_EFLAGS = saved EFLAGS
+        movi  r0, 0xF014
+        movhi r0, 0x03FF
+        lw    r1, 64(r13)             // r1 = saved ESTATUS
+        sw    r1, 0(r0)               // REG_ESTATUS = saved ESTATUS
+
+        // Restore all GPRs.
+        lw    r0,   0(r13)
+        lw    r1,   4(r13)
+        lw    r2,   8(r13)
+        lw    r3,  12(r13)
+        lw    r4,  16(r13)
+        lw    r5,  20(r13)
+        lw    r6,  24(r13)
+        lw    r7,  28(r13)
+        lw    r8,  32(r13)
+        lw    r9,  36(r13)
+        lw    r10, 40(r13)
+        lw    r11, 44(r13)
+        lw    r12, 48(r13)
+        lw    lr,  52(r13)
+
+        // Restore sp and atomically return.
+        // KRET: PC=EPC, flags=EFLAGS, STATUS=ESTATUS (IE restored atomically).
+        addi  r13, r13, 68
+        .byte 0x00, 0x00, 0x00, 0x3F // KRET (opcode 0x3F, all other bits 0)

@@ -15,12 +15,13 @@
 void
 plicinit(void)
 {
-  // Do NOT unmask any interrupt sources in the IC.
-  // CPUTwo hardware irrecoverably clobbers lr (r14) on every trap entry,
-  // so any asynchronous interrupt during user-mode execution destroys
-  // leaf-function return addresses.  All device events are handled by
-  // polling (polldev() in the scheduler idle loop and on syscall entry).
-  mmio_w(IC_ENABLE, 0);
+  // Enable UART RX and block device interrupts in the IC.
+  // Timer is enabled separately after kernelvec is verified.
+  // Enable timer, UART RX, and block device interrupts in the IC.
+  // Enable UART RX and block device interrupts via the IC.
+  // Timer is polled (not interrupt-driven) because the high-frequency
+  // timer interrupt + KRET return sequence has a known interaction bug.
+  mmio_w(IC_ENABLE, IC_BIT_UART_RX | IC_BIT_BLKDEV);
 }
 
 void

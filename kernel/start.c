@@ -34,6 +34,8 @@ start(void)
     evec_table[i] = (uint32)kernelvec;
 
   // Write the EVEC table base address to the supervisor EVEC register.
+  // EVEC slot 15 is reserved for the kerneltrap function pointer,
+  // set later by trapinit().
   mmio_w(REG_EVEC, (uint32)evec_table);
 
   // Keep each CPU's hart id in r11 (our "tp" equivalent).
@@ -51,14 +53,8 @@ start(void)
 void
 timerinit(void)
 {
-  // Start the timer (enable + device interrupt) but do NOT unmask it in
-  // the IC.  CPUTwo hardware irrecoverably clobbers lr (r14) on every
-  // trap entry, so asynchronous timer interrupts in user mode would
-  // destroy leaf-function return addresses.  Instead, the timer pending
-  // bit is polled from polldev() (scheduler idle) and checked in
-  // usertrap() on every syscall to give preemption at syscall boundaries.
+  // Start the periodic timer with interrupts enabled.
+  // The IC mask for the timer is set in plicinit().
   mmio_w(TIMER_PERIOD, 100000);
   mmio_w(TIMER_CTRL, 0x3);  // bit0=enable, bit1=irq enable
-
-  // Do NOT enable IC_BIT_TIMER in the IC mask — timer is polled only.
 }

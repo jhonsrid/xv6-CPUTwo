@@ -64,24 +64,19 @@ The port was done incrementally with the help of Claude Code. The major changes 
 - `TRAPFRAME` = `0x03EFD000`
 - MMIO region `0x03F00000`–`0x03FFFFFF` bypasses the MMU in hardware
 
-### Interrupt handling — all polling
+### Interrupt handling — hybrid
 
-CPUTwo's architecture makes traditional interrupt handling impractical:
+CPUTwo's architecture now preserves all GPRs on trap entry and allows exceptions in supervisor mode. The kernel uses a hybrid interrupt model:
 
-1. Hardware clobbers `lr` on every trap entry, destroying leaf-function return addresses
-2. Any exception in supervisor mode causes an immediate halt (double fault)
-
-All device I/O is therefore handled by **polling** rather than interrupts:
-
-- **IC mask is zero** — no interrupt sources are unmasked in the interrupt controller
-- **`polldev()`** in `trap.c` checks UART status and timer pending bits directly, called from the scheduler idle loop and on syscall entry
-- **Console output** uses synchronous polling (`uartputc_sync`) instead of interrupt-driven TX
-- **Block device** uses synchronous polling (spin on status register)
-- **Preemption** happens at syscall boundaries by checking the timer pending bit, not via timer interrupts
+- **UART RX and block device** are interrupt-driven — the IC mask enables these sources, and `kernelvec.S` handles them in supervisor mode via `KRET` (opcode 0x3F) for atomic IE-restore+return
+- **Timer** is polled at syscall boundaries — timer interrupts via `KRET` have a known interaction issue with the emulator's instruction loop, so the timer pending bit is checked on every syscall in `usertrap()` instead
+- **Console output** uses synchronous polling (`uartputc_sync`) for simplicity
+- **Block device I/O** uses synchronous polling (the emulator completes commands instantly)
+- **Scheduler idle loop** enables IE so UART interrupts wake sleeping processes without busy-waiting; WFI idles the host CPU
 
 ### Syscall stubs
 
-CPUTwo's `SYSCALL` instruction clobbers `lr`, so the user-space syscall stubs (`usys.pl`) save and restore `lr` on the stack around the `SYSCALL` instruction.
+Hardware preserves all GPRs (including `lr`) across trap entry, so the user-space syscall stubs (`usys.pl`) are simple: shift arguments, set the syscall number, `SYSCALL`, return. No lr save/restore needed.
 
 ### ELF loading
 

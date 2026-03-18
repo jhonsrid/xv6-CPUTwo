@@ -433,38 +433,28 @@ scheduler(void)
   struct cpu *c = mycpu();
 
   c->proc = 0;
-  //printf("scheduler: starting loop, proc_end=0x%x\n", (uint32)proc_end);
   for(;;){
-    // CPUTwo: do NOT call intr_on() here — any interrupt/exception in
-    // supervisor mode causes an immediate CPU halt (double-fault).
-    // Interrupts are only handled when a user process is running.
+    // Enable interrupts so timer/UART/blkdev interrupts can fire
+    // while we scan for runnable processes or idle.  kernelvec handles
+    // any interrupts that arrive, potentially waking sleeping processes.
+    intr_on();
 
     int found = 0;
     for(p = proc; p < proc_end; p++) {
       acquire(&p->lock);
       if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
-        //printf("scheduler: swtch to pid=%d context.lr=0x%x sp=0x%x\n",
-        //       p->pid, p->context.lr, p->context.sp);
         swtch(&c->context, &p->context);
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
         c->proc = 0;
         found = 1;
       }
       release(&p->lock);
     }
     if(found == 0) {
-      // Nothing to run.  CPUTwo cannot take real interrupts in
-      // supervisor mode (double-fault), so poll for pending device
-      // events here.  This lets UART RX / block-device completions
-      // wake sleeping processes.
-      polldev();
+      // Nothing to run — idle until an interrupt arrives.
+      // WFI tells the emulator to sleep, avoiding 100% host CPU usage.
+      mmio_w(REG_WFI, 0);
     }
   }
 }

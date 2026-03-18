@@ -51,9 +51,7 @@ uint cons_e;  // Edit index
 
 //
 // user write() system calls to the console go here.
-// CPUTwo: use synchronous (polling) output because interrupt-driven TX
-// deadlocks — sleep() puts the process in supervisor mode where any
-// interrupt causes a double fault / halt.
+// Uses synchronous (polling) output for simplicity.
 //
 int
 consolewrite(int user_src, uint32 src, int n)
