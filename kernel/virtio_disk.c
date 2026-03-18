@@ -36,16 +36,14 @@ virtio_disk_init(void)
 {
   initlock(&disk_lock, "blkdev");
 
-  // CPUTwo: interrupts in supervisor mode cause a double-fault (CPU halts).
-  // I/O completes synchronously in the emulator, so we poll instead.
-  // Leave IRQ disabled (BLK_CTRL=0) to avoid spurious ic_pending bits.
+  // The emulator completes I/O synchronously, so we poll for completion
+  // rather than using interrupt-driven sleep/wakeup.
   mmio_w(BLK_CTRL, 0);
 }
 
 // Issue one block read or write.  Polls for completion.
-// CPUTwo: interrupts cannot be enabled in supervisor mode (double-fault),
-// and the emulator completes I/O synchronously on the BLK_CMD write,
-// so polling always returns immediately.
+// The emulator completes I/O synchronously on the BLK_CMD write,
+// so the status poll always returns immediately.
 void
 virtio_disk_rw(struct buf *b, int write)
 {

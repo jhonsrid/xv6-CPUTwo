@@ -21,10 +21,10 @@ CPUTwo is a minimal 32-bit RISC CPU with a 64 MB address space, Sv32-compatible 
 Key differences from RISC-V that shaped the port:
 
 - **32-bit only** — Sv32 page tables, 4 KB pages, no 64-bit types in hardware
-- **lr (r14) clobbered on trap entry** — hardware destroys the link register on every exception/interrupt, so asynchronous interrupts cannot be used safely; all device I/O is polled
-- **Double fault halts the CPU** — any exception in supervisor mode halts immediately, so interrupt handlers cannot run in kernel mode
+- **All GPRs preserved on trap entry** — hardware does the EVEC table lookup internally without touching any register (unlike RISC-V which uses `sscratch`), so the trampoline must free a scratch register itself (xv6 uses the user stack)
+- **Supervisor-mode exceptions dispatch normally** — no double-fault halt; kernel interrupt handlers use `KRET` (opcode 0x3F) for atomic IE-restore + return
 - **MMIO bypass** — addresses >= `0x03F00000` always bypass the MMU, so device registers are accessible without page table entries
-- **No WFI instruction** — idle hinting is done via a custom MMIO register (`0x03FFF020`)
+- **WFI via MMIO** — writing to `0x03FFF020` idles the host CPU until an event arrives
 
 ---
 

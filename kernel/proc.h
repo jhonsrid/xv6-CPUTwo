@@ -51,7 +51,7 @@ struct trapframe {
   /* 64 */ uint32 r11;           // user r11 (overwritten by kernel hartid use)
   /* 68 */ uint32 r12;
   /* 72 */ uint32 r13;           // user stack pointer
-  /* 76 */ uint32 r14;           // user lr (clobbered by hardware; saved as 0)
+  /* 76 */ uint32 r14;           // user lr (preserved by hardware)
 };
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };

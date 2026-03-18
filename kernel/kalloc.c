@@ -51,9 +51,6 @@ kfree(void *pa)
   if(((uint32)pa % PGSIZE) != 0 || (char*)pa < _end || (uint32)pa >= PHYSTOP)
     panic("kfree");
 
-  // Fill with junk to catch dangling refs.
-  // memset(pa, 1, PGSIZE);  // CPUTwo: emulator zeros all RAM at reset
-
   r = (struct run*)pa;
 
   acquire(&kmem_lock);
@@ -76,7 +73,5 @@ kalloc(void)
     kmem_freelist = r->next;
   release(&kmem_lock);
 
-  // if(r)
-  //   memset((char*)r, 5, PGSIZE); // CPUTwo: emulator zeros all RAM at reset
   return (void*)r;
 }

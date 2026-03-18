@@ -15,12 +15,9 @@
 void
 plicinit(void)
 {
-  // Enable UART RX and block device interrupts in the IC.
-  // Timer is enabled separately after kernelvec is verified.
-  // Enable timer, UART RX, and block device interrupts in the IC.
   // Enable UART RX and block device interrupts via the IC.
-  // Timer is polled (not interrupt-driven) because the high-frequency
-  // timer interrupt + KRET return sequence has a known interaction bug.
+  // Timer preemption is handled by polling at syscall boundaries
+  // (see usertrap in trap.c) rather than via IC-dispatched interrupts.
   mmio_w(IC_ENABLE, IC_BIT_UART_RX | IC_BIT_BLKDEV);
 }
 
